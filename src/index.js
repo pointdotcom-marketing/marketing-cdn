@@ -34,6 +34,14 @@ const PREVIEW_TYPES = new Set(['pdf', 'html', 'htm', 'jpg', 'jpeg', 'png', 'gif'
 // File types that should be compressed
 const COMPRESSIBLE_TYPES = new Set(['js', 'css', 'html', 'htm', 'json', 'svg', 'xml', 'txt']);
 
+// Allowed origins for CORS requests
+const ALLOWED_ORIGINS = [
+	'https://www.point.dev',
+	'https://point.com',
+	'https://scorecredit.com',
+	'https://scorecredit.webflow.io'
+];
+
 // Generate unique filename by adding -1, -2, etc. if file exists
 async function getUniqueFilename(bucket, originalName) {
 	const extension = originalName.includes('.') ? originalName.split('.').pop() : '';
@@ -383,6 +391,28 @@ export default {
 				return Response.redirect('https://point.com', 302);
 			}
 
+			// Check if request is from an allowed origin
+			const origin = request.headers.get('Origin');
+			const referer = request.headers.get('Referer');
+
+			// Determine if this is a cross-origin request
+			const isCrossOriginRequest = origin || referer;
+
+			if (isCrossOriginRequest) {
+				// Extract the origin from referer if origin header is not present
+				const requestOrigin = origin || (referer ? new URL(referer).origin : null);
+				
+				// Check if the origin is allowed
+				if (!ALLOWED_ORIGINS.includes(requestOrigin)) {
+					return new Response('Forbidden', { 
+						status: 403,
+						headers: {
+							'Content-Type': 'text/plain'
+						}
+					});
+				}
+			}
+
 			// Determine content type based on file extension
 			const extension = path.split('.').pop().toLowerCase();
 			const contentType = CONTENT_TYPES[extension] || 'application/octet-stream';
@@ -395,10 +425,15 @@ export default {
 			const headers = new Headers({
 				'Content-Type': contentType,
 				'Cache-Control': 'public, max-age=31536000',
-				'Access-Control-Allow-Origin': '*',
 				ETag: object.httpEtag,
 				'Last-Modified': object.uploaded.toUTCString(),
 			});
+
+			// Only set CORS headers for allowed origins
+			if (origin && ALLOWED_ORIGINS.includes(origin)) {
+				headers.set('Access-Control-Allow-Origin', origin);
+				headers.set('Vary', 'Origin');
+			}
 
 			// Add Vary header for compressed content
 			if (shouldCompress) {
