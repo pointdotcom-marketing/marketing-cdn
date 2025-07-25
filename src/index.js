@@ -38,8 +38,9 @@ const COMPRESSIBLE_TYPES = new Set(['js', 'css', 'html', 'htm', 'json', 'svg', '
 const ALLOWED_ORIGINS = [
 	'https://www.point.dev',
 	'https://point.com',
+	'https://files.point.com',
 	'https://scorecredit.com',
-	'https://scorecredit.webflow.io'
+	'https://scorecredit.webflow.io',
 ];
 
 // Generate unique filename by adding -1, -2, etc. if file exists
@@ -401,14 +402,14 @@ export default {
 			if (isCrossOriginRequest) {
 				// Extract the origin from referer if origin header is not present
 				const requestOrigin = origin || (referer ? new URL(referer).origin : null);
-				
+
 				// Check if the origin is allowed
 				if (!ALLOWED_ORIGINS.includes(requestOrigin)) {
-					return new Response('Forbidden', { 
+					return new Response('Forbidden', {
 						status: 403,
 						headers: {
-							'Content-Type': 'text/plain'
-						}
+							'Content-Type': 'text/plain',
+						},
 					});
 				}
 			}
