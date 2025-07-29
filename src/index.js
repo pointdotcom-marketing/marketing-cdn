@@ -420,7 +420,8 @@ export default {
 
 			// Check if this is a /code path request for compression
 			const isCodePath = path.startsWith('code/');
-			const shouldCompress = isCodePath && COMPRESSIBLE_TYPES.has(extension);
+			const isDirectNavigation = !request.headers.get('Referer') && request.headers.get('Accept')?.includes('text/html');
+			const shouldCompress = isCodePath && COMPRESSIBLE_TYPES.has(extension) && !isDirectNavigation;
 
 			// Prepare headers with caching
 			const headers = new Headers({
