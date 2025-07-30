@@ -421,8 +421,7 @@ export default {
 			// Check if this is a /code path request for compression
 			const isCodePath = path.startsWith('code/');
 			const isDirectNavigation = !request.headers.get('Referer') && request.headers.get('Accept')?.includes('text/html');
-			const isScriptRequest = request.headers.get('Accept')?.includes('*/*') && extension === 'js';
-			const shouldCompress = isCodePath && COMPRESSIBLE_TYPES.has(extension) && !isDirectNavigation && !isScriptRequest;
+			const shouldCompress = isCodePath && COMPRESSIBLE_TYPES.has(extension) && !isDirectNavigation;
 
 			// Prepare headers with caching
 			const headers = new Headers({
@@ -457,39 +456,9 @@ export default {
 
 				if (acceptEncoding.includes('gzip')) {
 					try {
-						// Read the full content first
-						const content = await object.arrayBuffer();
-						
-						// Compress the content
-						const stream = new CompressionStream('gzip');
-						const writer = stream.writable.getWriter();
-						const reader = stream.readable.getReader();
-						
-						// Write content to compression stream
-						writer.write(new Uint8Array(content));
-						writer.close();
-						
-						// Read compressed chunks
-						const chunks = [];
-						let done = false;
-						while (!done) {
-							const { value, done: readerDone } = await reader.read();
-							done = readerDone;
-							if (value) chunks.push(value);
-						}
-						
-						// Combine chunks into single array
-						const compressedSize = chunks.reduce((size, chunk) => size + chunk.length, 0);
-						const compressed = new Uint8Array(compressedSize);
-						let offset = 0;
-						for (const chunk of chunks) {
-							compressed.set(chunk, offset);
-							offset += chunk.length;
-						}
-						
-						responseBody = compressed;
+						// Use the proper pipeThrough approach for compression
+						responseBody = object.body.pipeThrough(new CompressionStream('gzip'));
 						headers.set('Content-Encoding', 'gzip');
-						headers.set('Content-Length', compressed.length.toString());
 					} catch (error) {
 						console.error('Compression error:', error);
 						// Fallback to uncompressed content
