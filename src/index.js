@@ -418,10 +418,8 @@ export default {
 			const extension = path.split('.').pop().toLowerCase();
 			const contentType = CONTENT_TYPES[extension] || 'application/octet-stream';
 
-			// Check if this is a /code path request for compression
-			const isCodePath = path.startsWith('code/');
-			const isDirectNavigation = !request.headers.get('Referer') && request.headers.get('Accept')?.includes('text/html');
-			const shouldCompress = isCodePath && COMPRESSIBLE_TYPES.has(extension) && !isDirectNavigation;
+			// Disable manual compression for /code path - let Cloudflare handle automatic compression
+			const shouldCompress = false;
 
 			// Prepare headers with caching
 			const headers = new Headers({
@@ -437,10 +435,7 @@ export default {
 				headers.set('Vary', 'Origin');
 			}
 
-			// Add Vary header for compressed content
-			if (shouldCompress) {
-				headers.set('Vary', 'Accept-Encoding');
-			}
+			// Vary header removed - no manual compression
 
 			// Set Content-Disposition based on file type and download parameter
 			if (forceDownload) {
@@ -449,23 +444,8 @@ export default {
 				headers.set('Content-Disposition', 'inline');
 			}
 
-			// Handle compression for text-based assets in /code path
+			// No manual compression - let Cloudflare handle automatic compression
 			let responseBody = object.body;
-			if (shouldCompress) {
-				const acceptEncoding = request.headers.get('Accept-Encoding') || '';
-
-				if (acceptEncoding.includes('gzip')) {
-					try {
-						// Use the proper pipeThrough approach for compression
-						responseBody = object.body.pipeThrough(new CompressionStream('gzip'));
-						headers.set('Content-Encoding', 'gzip');
-					} catch (error) {
-						console.error('Compression error:', error);
-						// Fallback to uncompressed content
-						responseBody = object.body;
-					}
-				}
-			}
 
 			// Handle MP4 files specially for streaming
 			if (extension === 'mp4') {
