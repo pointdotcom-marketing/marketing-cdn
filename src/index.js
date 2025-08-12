@@ -489,11 +489,22 @@ export default {
 							});
 						}
 
-						const partial = await object.body.slice(start, end + 1);
-						headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
-						headers.set('Content-Length', (end - start + 1).toString());
+						const length = end - start + 1;
+						const ranged = await env.CDN_BUCKET.get(path, { range: { offset: start, length } });
+						if (!ranged || !ranged.body) {
+							return new Response('Requested Range Not Satisfiable', {
+								status: 416,
+								headers: {
+									'Accept-Ranges': 'bytes',
+									'Content-Range': `bytes */${size}`,
+								},
+							});
+						}
 
-						return new Response(partial, {
+						headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
+						headers.set('Content-Length', String(length));
+
+						return new Response(ranged.body, {
 							status: 206,
 							headers,
 						});
