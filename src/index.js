@@ -70,6 +70,9 @@ async function getFilesList(bucket, search = '') {
 		const objects = await bucket.list();
 		let files = objects.objects.map((obj) => obj.key);
 
+		// Only include files within the 'code/' directory and its subdirectories
+		files = files.filter((filename) => filename.startsWith('code/'));
+
 		// Filter by search term if provided (case-insensitive)
 		if (search) {
 			const searchLower = search.toLowerCase();
