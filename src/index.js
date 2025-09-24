@@ -859,7 +859,7 @@ function getBrowseHTML(origin, password) {
                         return \`
                             <div class="file-item">
                                 <div class="file-name" title="\${filename}">\${envBadge}\${filename}</div>
-                                <div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
+                                <div class="file-url" title="\${url}" onclick="copyHtmlContent('\${fullPath}', this)">\${url}</div>
                                 <button class="copy-btn" onclick="copyHtmlContent('\${fullPath}', this)">📄 Copy Content</button>
                             </div>
                         \`;
