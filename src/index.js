@@ -514,17 +514,20 @@ function getBrowseHTML(origin, password) {
             align-items: center;
             gap: 20px;
             margin-bottom: 25px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            overflow: hidden;
         }
         h1 {
             color: #333;
             margin: 0;
-            flex: 1;
-            min-width: 200px;
+            flex: 0 0 auto;
+            white-space: nowrap;
+            font-size: clamp(1.5rem, 3vw, 2rem);
         }
         .search-container {
-            flex: 2;
-            min-width: 300px;
+            flex: 1;
+            min-width: 250px;
+            max-width: 600px;
         }
         .search-input {
             width: 100%;
@@ -540,19 +543,33 @@ function getBrowseHTML(origin, password) {
             border-color: #007bff;
             box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
         }
+        @media (max-width: 1024px) {
+            .header-section {
+                gap: 15px;
+            }
+            h1 {
+                font-size: clamp(1.25rem, 2.5vw, 1.75rem);
+            }
+            .search-container {
+                min-width: 200px;
+            }
+        }
         @media (max-width: 768px) {
             .header-section {
                 flex-direction: column;
                 align-items: stretch;
                 gap: 15px;
+                flex-wrap: wrap;
             }
             h1 {
                 text-align: center;
                 margin-bottom: 10px;
+                font-size: 1.5rem;
             }
             .search-container {
                 flex: none;
                 min-width: auto;
+                max-width: none;
             }
         }
         .file-list {
