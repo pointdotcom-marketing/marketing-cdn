@@ -64,8 +64,81 @@ async function getUniqueFilename(bucket, originalName) {
 	return filename;
 }
 
-// Get list of files from R2 bucket with optional search filter
-async function getFilesList(bucket, search = '') {
+// Simple fuzzy search scoring function
+function fuzzyScore(filename, query) {
+	if (!query) return 1; // Perfect score if no query
+
+	const filenameLower = filename.toLowerCase();
+	const queryLower = query.toLowerCase();
+
+	// Exact substring match gets highest score
+	if (filenameLower.includes(queryLower)) {
+		return 1;
+	}
+
+	// Split filename into searchable parts (by common delimiters)
+	const filenameParts = filenameLower.split(/[-_.\/]/);
+	const queryParts = queryLower.split(/[\s-_]/);
+
+	// Check if all query parts are found in any filename parts
+	let totalScore = 0;
+	let matchedParts = 0;
+
+	for (const queryPart of queryParts) {
+		if (queryPart.length === 0) continue;
+
+		let bestPartScore = 0;
+
+		for (const filenamePart of filenameParts) {
+			const score = fuzzyMatchPart(filenamePart, queryPart);
+			bestPartScore = Math.max(bestPartScore, score);
+		}
+
+		if (bestPartScore > 0.3) {
+			// Minimum threshold for a part match
+			totalScore += bestPartScore;
+			matchedParts++;
+		}
+	}
+
+	// Return average score across matched parts, or 0 if no parts matched
+	return matchedParts > 0 ? totalScore / queryParts.length : 0;
+}
+
+// Helper function to score matching between individual parts
+function fuzzyMatchPart(filenamePart, queryPart) {
+	if (filenamePart.includes(queryPart)) return 1;
+
+	let score = 0;
+	let queryIndex = 0;
+	let consecutiveMatches = 0;
+
+	for (let i = 0; i < filenamePart.length && queryIndex < queryPart.length; i++) {
+		if (filenamePart[i] === queryPart[queryIndex]) {
+			score += 0.1; // Base points for each character match
+			score += (filenamePart.length - i) * 0.01; // Bonus for earlier matches
+			consecutiveMatches++;
+			score += consecutiveMatches * 0.05; // Bonus for consecutive matches
+			queryIndex++;
+		} else {
+			consecutiveMatches = 0;
+		}
+	}
+
+	// Normalize score by query length and add completion bonus
+	const completionRatio = queryIndex / queryPart.length;
+	score = score * completionRatio;
+
+	// Bonus for completing the entire query
+	if (queryIndex === queryPart.length) {
+		score += 0.3;
+	}
+
+	return Math.min(score, 1); // Cap at 1.0
+}
+
+// Get list of files from R2 bucket with optional search and environment filters
+async function getFilesList(bucket, search = '', env = 'all') {
 	try {
 		const objects = await bucket.list();
 		let files = objects.objects.map((obj) => obj.key);
@@ -73,10 +146,19 @@ async function getFilesList(bucket, search = '') {
 		// Only include files within the 'code/' directory and its subdirectories
 		files = files.filter((filename) => filename.startsWith('code/'));
 
-		// Filter by search term if provided (case-insensitive)
+		// Filter by environment (staging/prod/all)
+		if (env === 'staging') {
+			files = files.filter((filename) => filename.startsWith('code/staging/'));
+		} else if (env === 'prod') {
+			files = files.filter((filename) => filename.startsWith('code/') && !filename.startsWith('code/staging/'));
+		}
+
+		// Filter by search term if provided (fuzzy search)
 		if (search) {
-			const searchLower = search.toLowerCase();
-			files = files.filter((filename) => filename.toLowerCase().includes(searchLower));
+			files = files.filter((filename) => {
+				const score = fuzzyScore(filename, search);
+				return score > 0.2; // Minimum threshold for fuzzy matches
+			});
 		}
 
 		// Sort alphabetically
@@ -374,7 +456,7 @@ function getBrowsePasswordHTML(errorMessage = '') {
 </head>
 <body>
     <div class="container">
-        <h1>🔐 Point CDN File Browser</h1>
+        <h1>🔐 PDC Custom Code Browser</h1>
         ${errorMessage ? `<div class="error">${errorMessage}</div>` : ''}
         <div class="info">
             Enter the password to access the file browser and search CDN files.
@@ -404,49 +486,89 @@ function getBrowseHTML(origin, password) {
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 800px;
+            max-width: 1400px;
             margin: 0 auto;
             padding: 20px;
             background: #f5f5f5;
         }
+        @media (max-width: 768px) {
+            body {
+                max-width: 100%;
+                padding: 10px;
+            }
+        }
         .container {
             background: white;
             padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        }
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                border-radius: 8px;
+            }
+        }
+        .header-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
         }
         h1 {
             color: #333;
-            margin-bottom: 20px;
-            text-align: center;
+            margin: 0;
+            flex: 1;
+            min-width: 200px;
         }
         .search-container {
-            margin-bottom: 20px;
+            flex: 2;
+            min-width: 300px;
         }
         .search-input {
             width: 100%;
-            padding: 12px;
+            padding: 12px 16px;
             border: 2px solid #ddd;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 16px;
             box-sizing: border-box;
+            transition: border-color 0.2s;
         }
         .search-input:focus {
             outline: none;
             border-color: #007bff;
+            box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
+        }
+        @media (max-width: 768px) {
+            .header-section {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 15px;
+            }
+            h1 {
+                text-align: center;
+                margin-bottom: 10px;
+            }
+            .search-container {
+                flex: none;
+                min-width: auto;
+            }
         }
         .file-list {
-            max-height: 500px;
+            max-height: 600px;
             overflow-y: auto;
             border: 1px solid #ddd;
-            border-radius: 6px;
+            border-radius: 8px;
+            background: #fafafa;
         }
         .file-item {
             display: flex;
             align-items: center;
-            padding: 12px 15px;
+            padding: 14px 20px;
             border-bottom: 1px solid #eee;
             transition: background-color 0.2s;
+            gap: 15px;
         }
         .file-item:hover {
             background-color: #f8f9fa;
@@ -455,34 +577,78 @@ function getBrowseHTML(origin, password) {
             border-bottom: none;
         }
         .file-name {
-            flex: 1;
-            font-family: monospace;
+            flex: 3;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
             font-size: 14px;
             word-break: break-all;
+            min-width: 200px;
         }
         .file-url {
-            flex: 2;
-            font-family: monospace;
-            font-size: 12px;
+            flex: 4;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-size: 13px;
             color: #666;
-            margin: 0 10px;
             word-break: break-all;
+            background: #f8f9fa;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+            min-width: 300px;
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .file-url:hover {
+            background: #e9ecef;
+            border-color: #007bff;
+            color: #007bff;
+        }
+        .file-url.copied {
+            background: #d4edda !important;
+            border-color: #28a745 !important;
+            color: #155724 !important;
         }
         .copy-btn {
             background: #007bff;
             color: white;
             border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
+            padding: 8px 14px;
+            border-radius: 6px;
             cursor: pointer;
-            font-size: 12px;
-            transition: background-color 0.2s;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            white-space: nowrap;
+            flex-shrink: 0;
         }
         .copy-btn:hover {
             background: #0056b3;
+            transform: translateY(-1px);
         }
         .copy-btn.copied {
             background: #28a745;
+        }
+        @media (max-width: 1024px) {
+            .file-item {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+                padding: 12px 15px;
+            }
+            .file-name {
+                flex: none;
+                min-width: auto;
+            }
+            .file-url {
+                flex: none;
+                min-width: auto;
+                font-size: 12px;
+            }
+            .copy-btn {
+                align-self: flex-end;
+                padding: 6px 12px;
+                font-size: 12px;
+            }
         }
         .no-files {
             text-align: center;
@@ -495,36 +661,122 @@ function getBrowseHTML(origin, password) {
             color: #666;
         }
         .nav-links {
-            text-align: center;
-            margin-top: 20px;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 25px;
             padding-top: 20px;
             border-top: 1px solid #eee;
+            flex-wrap: wrap;
         }
         .nav-links a {
             color: #007bff;
             text-decoration: none;
-            margin: 0 10px;
+            font-weight: 500;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.2s;
         }
         .nav-links a:hover {
-            text-decoration: underline;
+            background: #f8f9fa;
+            text-decoration: none;
+            transform: translateY(-1px);
+        }
+        @media (max-width: 768px) {
+            .nav-links {
+                gap: 15px;
+            }
+            .nav-links a {
+                padding: 6px 12px;
+                font-size: 14px;
+            }
         }
         .stats {
-            text-align: center;
             color: #666;
             font-size: 14px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .controls-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 20px;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .env-filters {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .env-filter-btn {
+            padding: 8px 14px;
+            border: 2px solid #ddd;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .env-filter-btn:hover {
+            border-color: #007bff;
+            transform: translateY(-1px);
+        }
+        .env-filter-btn.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+            box-shadow: 0 2px 4px rgba(0,123,255,0.2);
+        }
+        @media (max-width: 768px) {
+            .controls-bar {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 15px;
+            }
+            .env-filters {
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+        }
+        .env-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-right: 8px;
+        }
+        .env-badge.prod {
+            background: #28a745;
+            color: white;
+        }
+        .env-badge.staging {
+            background: #ffc107;
+            color: #212529;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔍 Point CDN File Browser</h1>
-
-        <div class="search-container">
-            <input type="text" id="search-input" class="search-input" placeholder="Search files... (press Enter or wait 300ms)" autocomplete="off">
+        <div class="header-section">
+            <h1>🔍 Point CDN File Browser</h1>
+            <div class="search-container">
+                <input type="text" id="search-input" class="search-input" placeholder="Search files... (fuzzy search, press Enter or wait 300ms)" autocomplete="off">
+            </div>
         </div>
 
-        <div id="stats" class="stats">Loading files...</div>
+        <div class="controls-bar">
+            <div class="env-filters">
+                <button class="env-filter-btn active" data-env="all">All Environments</button>
+                <button class="env-filter-btn" data-env="prod">Production</button>
+                <button class="env-filter-btn" data-env="staging">Staging</button>
+            </div>
+            <div id="stats" class="stats">Loading files...</div>
+        </div>
 
         <div id="file-list" class="file-list">
             <div class="loading">Loading files...</div>
@@ -542,12 +794,20 @@ function getBrowseHTML(origin, password) {
         const fileList = document.getElementById('file-list');
         const stats = document.getElementById('stats');
         const password = '${password}';
+        let currentEnv = 'all';
 
-        async function loadFiles(search = '') {
+        function getFileEnvironment(filename) {
+            if (filename.startsWith('code/staging/')) {
+                return 'staging';
+            }
+            return 'prod';
+        }
+
+        async function loadFiles(search = '', env = currentEnv) {
             try {
                 fileList.innerHTML = '<div class="loading">Loading files...</div>';
 
-                const response = await fetch(\`/api/files?password=\${encodeURIComponent(password)}&search=\${encodeURIComponent(search)}\`);
+                const response = await fetch(\`/api/files?password=\${encodeURIComponent(password)}&search=\${encodeURIComponent(search)}&env=\${encodeURIComponent(env)}\`);
                 const data = await response.json();
 
                 if (data.error) {
@@ -568,10 +828,15 @@ function getBrowseHTML(origin, password) {
 
                 fileList.innerHTML = files.map(url => {
                     const filename = url.split('/').pop();
+                    // Remove the origin from the URL to get the path
+                    const originPrefix = window.location.origin + '/';
+                    const fullPath = url.startsWith(originPrefix) ? url.substring(originPrefix.length) : url;
+                    const env = getFileEnvironment(fullPath);
+                    const envBadge = env === 'staging' ? '<span class="env-badge staging">staging</span>' : '<span class="env-badge prod">prod</span>';
                     return \`
                         <div class="file-item">
-                            <div class="file-name" title="\${filename}">\${filename}</div>
-                            <div class="file-url" title="\${url}">\${url}</div>
+                            <div class="file-name" title="\${filename}">\${envBadge}\${filename}</div>
+                            <div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
                             <button class="copy-btn" onclick="copyToClipboard('\${url}', this)">📋 Copy</button>
                         </div>
                     \`;
@@ -584,16 +849,25 @@ function getBrowseHTML(origin, password) {
             }
         }
 
-        function copyToClipboard(text, button) {
+        function copyToClipboard(text, element) {
             navigator.clipboard.writeText(text).then(() => {
-                const originalText = button.textContent;
-                button.textContent = '✅ Copied!';
-                button.classList.add('copied');
+                // Handle different element types
+                if (element.tagName === 'BUTTON') {
+                    const originalText = element.textContent;
+                    element.textContent = '✅ Copied!';
+                    element.classList.add('copied');
 
-                setTimeout(() => {
-                    button.textContent = originalText;
-                    button.classList.remove('copied');
-                }, 2000);
+                    setTimeout(() => {
+                        element.textContent = originalText;
+                        element.classList.remove('copied');
+                    }, 2000);
+                } else {
+                    // For div elements (file URLs), add a temporary highlight
+                    element.classList.add('copied');
+                    setTimeout(() => {
+                        element.classList.remove('copied');
+                    }, 2000);
+                }
             }).catch(err => {
                 console.error('Failed to copy:', err);
                 // Fallback for older browsers
@@ -604,14 +878,23 @@ function getBrowseHTML(origin, password) {
                 document.execCommand('copy');
                 document.body.removeChild(textArea);
 
-                const originalText = button.textContent;
-                button.textContent = '✅ Copied!';
-                button.classList.add('copied');
+                // Handle different element types for fallback too
+                if (element.tagName === 'BUTTON') {
+                    const originalText = element.textContent;
+                    element.textContent = '✅ Copied!';
+                    element.classList.add('copied');
 
-                setTimeout(() => {
-                    button.textContent = originalText;
-                    button.classList.remove('copied');
-                }, 2000);
+                    setTimeout(() => {
+                        element.textContent = originalText;
+                        element.classList.remove('copied');
+                    }, 2000);
+                } else {
+                    // For div elements (file URLs), add a temporary highlight
+                    element.classList.add('copied');
+                    setTimeout(() => {
+                        element.classList.remove('copied');
+                    }, 2000);
+                }
             });
         }
 
@@ -632,6 +915,19 @@ function getBrowseHTML(origin, password) {
                 clearTimeout(searchTimeout);
                 loadFiles(searchInput.value);
             }
+        });
+
+        // Handle environment filter buttons
+        document.querySelectorAll('.env-filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                // Update active button
+                document.querySelectorAll('.env-filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                // Update current environment and reload files
+                currentEnv = btn.dataset.env;
+                loadFiles(searchInput.value, currentEnv);
+            });
         });
     </script>
 </body>
@@ -709,7 +1005,8 @@ export default {
 						}
 
 						const search = url.searchParams.get('search') || '';
-						const files = await getFilesList(env.CDN_BUCKET, search);
+						const envFilter = url.searchParams.get('env') || 'all';
+						const files = await getFilesList(env.CDN_BUCKET, search, envFilter);
 						const cdnUrls = files.map((filename) => `${url.origin}/${filename}`);
 
 						return new Response(JSON.stringify({ files: cdnUrls }), {
