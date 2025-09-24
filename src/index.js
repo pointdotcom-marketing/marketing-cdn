@@ -383,7 +383,7 @@ function getBrowsePasswordHTML(errorMessage = '') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>File Browser Auth - Point CDN</title>
+    <title>🔐 PDC Custom Code Browser</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -763,7 +763,7 @@ function getBrowseHTML(origin, password) {
 <body>
     <div class="container">
         <div class="header-section">
-            <h1>🔍 Point CDN File Browser</h1>
+            <h1>🔍 PDC Custom Code Browser</h1>
             <div class="search-container">
                 <input type="text" id="search-input" class="search-input" placeholder="Search files... (fuzzy search, press Enter or wait 300ms)" autocomplete="off">
             </div>
