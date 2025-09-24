@@ -833,13 +833,28 @@ function getBrowseHTML(origin, password) {
                     const fullPath = url.startsWith(originPrefix) ? url.substring(originPrefix.length) : url;
                     const env = getFileEnvironment(fullPath);
                     const envBadge = env === 'staging' ? '<span class="env-badge staging">staging</span>' : '<span class="env-badge prod">prod</span>';
-                    return \`
-                        <div class="file-item">
-                            <div class="file-name" title="\${filename}">\${envBadge}\${filename}</div>
-                            <div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
-                            <button class="copy-btn" onclick="copyToClipboard('\${url}', this)">📋 Copy</button>
-                        </div>
-                    \`;
+
+                    // Check if file is HTML
+                    const extension = filename.split('.').pop().toLowerCase();
+                    const isHtml = extension === 'html' || extension === 'htm';
+
+                    if (isHtml) {
+                        return \`
+                            <div class="file-item">
+                                <div class="file-name" title="\${filename}">\${envBadge}\${filename}</div>
+                                <div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
+                                <button class="copy-btn" onclick="copyHtmlContent('\${fullPath}', this)">📄 Copy Content</button>
+                            </div>
+                        \`;
+                    } else {
+                        return \`
+                            <div class="file-item">
+                                <div class="file-name" title="\${filename}">\${envBadge}\${filename}</div>
+                                <div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
+                                <button class="copy-btn" onclick="copyToClipboard('\${url}', this)">📋 Copy</button>
+                            </div>
+                        \`;
+                    }
                 }).join('');
 
             } catch (error) {
@@ -896,6 +911,50 @@ function getBrowseHTML(origin, password) {
                     }, 2000);
                 }
             });
+        }
+
+        async function copyHtmlContent(filename, element) {
+            try {
+                // Show loading state
+                const originalText = element.textContent;
+                element.textContent = '⏳ Loading...';
+                element.disabled = true;
+
+                // Fetch HTML content
+                const response = await fetch(\`/api/file-content?password=\${encodeURIComponent(password)}&file=\${encodeURIComponent(filename)}\`);
+                const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // Copy content to clipboard
+                await navigator.clipboard.writeText(data.content);
+
+                // Show success state
+                element.textContent = '✅ Copied!';
+                element.classList.add('copied');
+
+                setTimeout(() => {
+                    element.textContent = originalText;
+                    element.classList.remove('copied');
+                    element.disabled = false;
+                }, 2000);
+
+            } catch (error) {
+                console.error('Failed to copy HTML content:', error);
+
+                // Show error state
+                const originalText = element.textContent;
+                element.textContent = '❌ Error';
+                element.classList.add('copied'); // Use same styling for error
+
+                setTimeout(() => {
+                    element.textContent = originalText;
+                    element.classList.remove('copied');
+                    element.disabled = false;
+                }, 2000);
+            }
         }
 
         // Load all files initially
@@ -1018,6 +1077,67 @@ export default {
 					} catch (error) {
 						console.error('Files API error:', error);
 						return new Response(JSON.stringify({ error: 'Failed to fetch files' }), {
+							status: 500,
+							headers: { 'Content-Type': 'application/json' },
+						});
+					}
+				}
+
+				// Method not allowed
+				return new Response('Method Not Allowed', { status: 405 });
+			}
+
+			// Handle file content API route for fetching HTML content
+			if (url.pathname === '/api/file-content') {
+				if (request.method === 'GET') {
+					try {
+						// Validate password for API access
+						const password = url.searchParams.get('password');
+						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
+							return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+								status: 401,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						const filename = url.searchParams.get('file');
+						if (!filename) {
+							return new Response(JSON.stringify({ error: 'File parameter required' }), {
+								status: 400,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						// Only allow HTML files for content fetching
+						const extension = filename.split('.').pop().toLowerCase();
+						if (extension !== 'html' && extension !== 'htm') {
+							return new Response(JSON.stringify({ error: 'Only HTML files are supported' }), {
+								status: 400,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						// Get the file from R2
+						const object = await env.CDN_BUCKET.get(filename);
+						if (!object) {
+							return new Response(JSON.stringify({ error: 'File not found' }), {
+								status: 404,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						// Read the content as text
+						const content = await object.text();
+
+						return new Response(JSON.stringify({ content }), {
+							headers: {
+								'Content-Type': 'application/json',
+								'Cache-Control': 'no-cache',
+							},
+						});
+					} catch (error) {
+						console.error('File content API error:', error);
+						return new Response(JSON.stringify({ error: 'Failed to fetch file content' }), {
 							status: 500,
 							headers: { 'Content-Type': 'application/json' },
 						});
