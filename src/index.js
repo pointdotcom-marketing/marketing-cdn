@@ -64,6 +64,28 @@ async function getUniqueFilename(bucket, originalName) {
 	return filename;
 }
 
+// Get list of files from R2 bucket with optional search filter
+async function getFilesList(bucket, search = '') {
+	try {
+		const objects = await bucket.list();
+		let files = objects.objects.map((obj) => obj.key);
+
+		// Filter by search term if provided (case-insensitive)
+		if (search) {
+			const searchLower = search.toLowerCase();
+			files = files.filter((filename) => filename.toLowerCase().includes(searchLower));
+		}
+
+		// Sort alphabetically
+		files.sort();
+
+		return files;
+	} catch (error) {
+		console.error('Error listing files:', error);
+		return [];
+	}
+}
+
 // HTML for the upload form
 const UPLOAD_FORM_HTML = `
 <!DOCTYPE html>
@@ -268,12 +290,443 @@ function getSuccessHTML(filename, cdnUrl) {
 `;
 }
 
+// HTML for the browse password form
+function getBrowsePasswordHTML(errorMessage = '') {
+	return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Browser Auth - Point CDN</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+        input[type="password"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        input[type="password"]:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Point CDN File Browser</h1>
+        ${errorMessage ? `<div class="error">${errorMessage}</div>` : ''}
+        <div class="info">
+            Enter the password to access the file browser and search CDN files.
+        </div>
+        <form method="POST">
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required placeholder="Enter access password" autofocus>
+            </div>
+            <button type="submit">Access File Browser</button>
+        </form>
+    </div>
+</body>
+</html>
+`;
+}
+
+// HTML for the file browser interface
+function getBrowseHTML(origin, password) {
+	return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Browser - Point CDN</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .search-container {
+            margin-bottom: 20px;
+        }
+        .search-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        .search-input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+        .file-list {
+            max-height: 500px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            border-bottom: 1px solid #eee;
+            transition: background-color 0.2s;
+        }
+        .file-item:hover {
+            background-color: #f8f9fa;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        .file-name {
+            flex: 1;
+            font-family: monospace;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .file-url {
+            flex: 2;
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            margin: 0 10px;
+            word-break: break-all;
+        }
+        .copy-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.2s;
+        }
+        .copy-btn:hover {
+            background: #0056b3;
+        }
+        .copy-btn.copied {
+            background: #28a745;
+        }
+        .no-files {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .nav-links {
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+        .stats {
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Point CDN File Browser</h1>
+
+        <div class="search-container">
+            <input type="text" id="search-input" class="search-input" placeholder="Search files... (press Enter or wait 300ms)" autocomplete="off">
+        </div>
+
+        <div id="stats" class="stats">Loading files...</div>
+
+        <div id="file-list" class="file-list">
+            <div class="loading">Loading files...</div>
+        </div>
+
+        <div class="nav-links">
+            <a href="/upload">📤 Upload Files</a>
+            <a href="${origin}">🏠 Home</a>
+        </div>
+    </div>
+
+    <script>
+        let searchTimeout;
+        const searchInput = document.getElementById('search-input');
+        const fileList = document.getElementById('file-list');
+        const stats = document.getElementById('stats');
+        const password = '${password}';
+
+        async function loadFiles(search = '') {
+            try {
+                fileList.innerHTML = '<div class="loading">Loading files...</div>';
+
+                const response = await fetch(\`/api/files?password=\${encodeURIComponent(password)}&search=\${encodeURIComponent(search)}\`);
+                const data = await response.json();
+
+                if (data.error) {
+                    fileList.innerHTML = '<div class="no-files">Error loading files</div>';
+                    stats.textContent = 'Error loading files';
+                    return;
+                }
+
+                const files = data.files || [];
+
+                if (files.length === 0) {
+                    fileList.innerHTML = '<div class="no-files">No files found</div>';
+                    stats.textContent = search ? \`No files match "\${search}"\` : 'No files in CDN';
+                    return;
+                }
+
+                stats.textContent = \`Found \${files.length} file\${files.length === 1 ? '' : 's'}\${search ? \` matching "\${search}"\` : ''}\`;
+
+                fileList.innerHTML = files.map(url => {
+                    const filename = url.split('/').pop();
+                    return \`
+                        <div class="file-item">
+                            <div class="file-name" title="\${filename}">\${filename}</div>
+                            <div class="file-url" title="\${url}">\${url}</div>
+                            <button class="copy-btn" onclick="copyToClipboard('\${url}', this)">📋 Copy</button>
+                        </div>
+                    \`;
+                }).join('');
+
+            } catch (error) {
+                console.error('Error loading files:', error);
+                fileList.innerHTML = '<div class="no-files">Error loading files</div>';
+                stats.textContent = 'Error loading files';
+            }
+        }
+
+        function copyToClipboard(text, button) {
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = button.textContent;
+                button.textContent = '✅ Copied!';
+                button.classList.add('copied');
+
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+
+                const originalText = button.textContent;
+                button.textContent = '✅ Copied!';
+                button.classList.add('copied');
+
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        // Load all files initially
+        loadFiles();
+
+        // Handle search input
+        searchInput.addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                loadFiles(searchInput.value);
+            }, 300);
+        });
+
+        // Handle Enter key
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                clearTimeout(searchTimeout);
+                loadFiles(searchInput.value);
+            }
+        });
+    </script>
+</body>
+</html>
+`;
+}
+
 export default {
 	async fetch(request, env) {
 		try {
 			// Parse the URL and get the pathname
 			const url = new URL(request.url);
 			const path = url.pathname.slice(1); // Remove leading slash
+
+			// Handle browse route
+			if (url.pathname === '/browse') {
+				if (request.method === 'GET') {
+					// Check for password in query params
+					const password = url.searchParams.get('password');
+
+					// Validate password - use same password as upload for consistency
+					if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
+						// Serve password form
+						return new Response(getBrowsePasswordHTML(), {
+							headers: { 'Content-Type': 'text/html' },
+						});
+					}
+
+					// Password valid, serve the file browser
+					return new Response(getBrowseHTML(url.origin, password), {
+						headers: { 'Content-Type': 'text/html' },
+					});
+				}
+
+				if (request.method === 'POST') {
+					try {
+						// Parse form data
+						const formData = await request.formData();
+						const password = formData.get('password');
+
+						// Validate password
+						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
+							return new Response(getBrowsePasswordHTML('Invalid password. Please try again.'), {
+								status: 401,
+								headers: { 'Content-Type': 'text/html' },
+							});
+						}
+
+						// Password valid, redirect to browse with password
+						return Response.redirect(`${url.origin}/browse?password=${encodeURIComponent(password)}`, 302);
+					} catch (error) {
+						console.error('Browse auth error:', error);
+						return new Response(getBrowsePasswordHTML('An error occurred. Please try again.'), {
+							status: 500,
+							headers: { 'Content-Type': 'text/html' },
+						});
+					}
+				}
+
+				// Method not allowed
+				return new Response('Method Not Allowed', { status: 405 });
+			}
+
+			// Handle files API route for dynamic search
+			if (url.pathname === '/api/files') {
+				if (request.method === 'GET') {
+					try {
+						// Validate password for API access - use same password as upload
+						const password = url.searchParams.get('password');
+						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
+							return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+								status: 401,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						const search = url.searchParams.get('search') || '';
+						const files = await getFilesList(env.CDN_BUCKET, search);
+						const cdnUrls = files.map((filename) => `${url.origin}/${filename}`);
+
+						return new Response(JSON.stringify({ files: cdnUrls }), {
+							headers: {
+								'Content-Type': 'application/json',
+								'Cache-Control': 'no-cache',
+							},
+						});
+					} catch (error) {
+						console.error('Files API error:', error);
+						return new Response(JSON.stringify({ error: 'Failed to fetch files' }), {
+							status: 500,
+							headers: { 'Content-Type': 'application/json' },
+						});
+					}
+				}
+
+				// Method not allowed
+				return new Response('Method Not Allowed', { status: 405 });
+			}
 
 			// Handle upload route
 			if (url.pathname === '/upload') {

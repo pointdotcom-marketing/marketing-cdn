@@ -9,30 +9,35 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 ## Key Features
 
 ### 🚀 Core CDN Functionality
+
 - **Global Edge Network**: Leverages Cloudflare's worldwide infrastructure
 - **R2 Storage Integration**: Scalable object storage with S3-compatible API
 - **Custom Domain Support**: Serves assets from `files.point.com`
 - **Intelligent Caching**: Optimized cache headers with ETags and Last-Modified
 
 ### 📤 File Upload System
+
 - **Web-based Upload Interface**: Accessible at `/upload` with password protection
 - **Automatic File Deduplication**: Prevents overwrites by adding incremental suffixes (-1, -2, etc.)
 - **Success Page with URL Copying**: User-friendly upload confirmation with shareable links
 - **Multiple Upload Methods**: Web interface, Cloudflare Dashboard, AWS S3 API, or Wrangler CLI
 
 ### 🔒 Security & Access Control
+
 - **CORS Protection**: Whitelist-based origin validation for cross-origin requests
 - **Password-Protected Uploads**: Secure file upload with configurable authentication
 - **Asset Path Validation**: Prevents unauthorized access patterns
 - **Origin-based Access Control**: Restricts access based on request origin
 
 ### ⚡ Performance Optimizations
+
 - **Gzip Compression**: Automatic compression for text-based assets in `/code` directory
 - **Content Type Detection**: Proper MIME type headers for 20+ file formats
 - **Preview vs Download Modes**: Intelligent content disposition based on file type
 - **Streaming Support**: Range request handling for video files (MP4)
 
 ### 🎥 Media Streaming
+
 - **MP4 Video Streaming**: Full range request support for efficient video delivery
 - **Chunked Transfer**: 1MB chunk optimization for large files
 - **Accept-Ranges Headers**: Proper HTTP range request handling
@@ -56,21 +61,27 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 ## Supported File Types
 
 ### Images
+
 - PNG, JPG/JPEG, GIF, SVG, WebP
 
 ### Documents
+
 - PDF, HTML, JSON
 
 ### Media
+
 - MP4 (with streaming support)
 
 ### Web Assets
+
 - JavaScript, CSS, HTML
 
 ### Fonts
+
 - WOFF, WOFF2, TTF, EOT
 
 ### Archives
+
 - ZIP
 
 ## Usage
@@ -78,6 +89,7 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 ### Uploading Assets
 
 #### Web Interface (Recommended)
+
 1. Navigate to `https://files.point.com/upload`
 2. Enter the upload password
 3. Select your file
@@ -85,6 +97,7 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 5. Copy the generated CDN URL
 
 #### Alternative Methods
+
 - **Cloudflare Dashboard**: Direct R2 bucket management
 - **AWS S3 API**: S3-compatible uploads using AWS CLI or SDKs
 - **Wrangler CLI**: Command-line uploads via `wrangler r2 object put`
@@ -98,6 +111,7 @@ https://files.point.com/{asset-path}
 ```
 
 **Examples:**
+
 - `https://files.point.com/images/logo.png`
 - `https://files.point.com/code/staging/components/nav.js`
 - `https://files.point.com/videos/demo.mp4`
@@ -144,6 +158,7 @@ head_sampling_rate = 1
 ## Development
 
 ### Prerequisites
+
 - Node.js 18+ or Bun
 - Cloudflare account with Workers and R2 enabled
 - Wrangler CLI
@@ -151,6 +166,7 @@ head_sampling_rate = 1
 ### Setup
 
 1. **Install dependencies:**
+
 ```bash
 npm install
 # or
@@ -158,16 +174,19 @@ bun install
 ```
 
 2. **Login to Cloudflare:**
+
 ```bash
 wrangler login
 ```
 
 3. **Configure environment variables:**
+
 ```bash
 wrangler secret put UPLOAD_PASSWORD
 ```
 
 4. **Start development server:**
+
 ```bash
 npm run dev
 # or
@@ -175,6 +194,7 @@ bun run dev
 ```
 
 5. **Deploy to production:**
+
 ```bash
 npm run deploy
 # or
@@ -197,16 +217,19 @@ wrangler dev
 ## Advanced Features
 
 ### Compression Logic
+
 - **Automatic Gzip**: Applied to JS, CSS, HTML, JSON, SVG, XML, TXT files in `/code` directory
 - **Smart Compression**: Only compresses when `Accept-Encoding: gzip` is present
 - **Fallback Handling**: Gracefully falls back to uncompressed content on compression errors
 
 ### CORS Handling
+
 - **Origin Validation**: Checks against predefined allowed origins list
 - **Referer Fallback**: Uses referer header when origin is not present
 - **Vary Headers**: Proper cache variation for cross-origin requests
 
 ### Error Handling
+
 - **404 Redirects**: Automatically redirects missing files to point.com
 - **Upload Errors**: User-friendly error pages for upload failures
 - **Range Request Errors**: Graceful fallback for invalid range requests
