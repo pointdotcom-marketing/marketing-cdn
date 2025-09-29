@@ -43,6 +43,23 @@ const ALLOWED_ORIGINS = [
 	'https://scorecredit.webflow.io',
 ];
 
+// Check if origin is a valid Webflow branch containing "new-point"
+function isValidWebflowBranch(origin) {
+	if (!origin || typeof origin !== 'string') return false;
+
+	try {
+		const url = new URL(origin);
+		// Must be a webflow.io domain
+		if (!url.hostname.endsWith('.webflow.io')) return false;
+
+		// Check if subdomain contains "new-point" (case-insensitive)
+		const subdomain = url.hostname.replace('.webflow.io', '');
+		return subdomain.toLowerCase().includes('new-point');
+	} catch {
+		return false;
+	}
+}
+
 // Generate unique filename by adding -1, -2, etc. if file exists
 async function getUniqueFilename(bucket, originalName) {
 	const extension = originalName.includes('.') ? originalName.split('.').pop() : '';
@@ -1293,8 +1310,8 @@ export default {
 				// Extract the origin from referer if origin header is not present
 				const requestOrigin = origin || (referer ? new URL(referer).origin : null);
 
-				// Check if the origin is allowed
-				if (!ALLOWED_ORIGINS.includes(requestOrigin)) {
+				// Check if the origin is allowed (including Webflow branches)
+				if (!ALLOWED_ORIGINS.includes(requestOrigin) && !isValidWebflowBranch(requestOrigin)) {
 					return new Response('Forbidden', {
 						status: 403,
 						headers: {
@@ -1319,8 +1336,8 @@ export default {
 				'Last-Modified': object.uploaded.toUTCString(),
 			});
 
-			// Only set CORS headers for allowed origins
-			if (origin && ALLOWED_ORIGINS.includes(origin)) {
+			// Only set CORS headers for allowed origins (including Webflow branches)
+			if (origin && (ALLOWED_ORIGINS.includes(origin) || isValidWebflowBranch(origin))) {
 				headers.set('Access-Control-Allow-Origin', origin);
 				headers.set('Vary', 'Origin');
 			}
