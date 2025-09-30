@@ -649,9 +649,9 @@ function getBrowseHTML(origin, password) {
             background: #0056b3;
             transform: translateY(-1px);
         }
-        .copy-btn.copied {
-            background: #28a745;
-        }
+		.copy-btn.copied {
+			background: #28a745;
+		}
         @media (max-width: 1024px) {
             .file-item {
                 flex-direction: column;
@@ -782,6 +782,41 @@ function getBrowseHTML(origin, password) {
             background: #ffc107;
             color: #212529;
         }
+        .context-menu {
+            position: fixed;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            padding: 4px 0;
+            z-index: 1000;
+            min-width: 150px;
+            display: none;
+        }
+        .context-menu.show {
+            display: block;
+        }
+        .context-menu-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .context-menu-item:hover {
+            background: #f8f9fa;
+        }
+        .context-menu-item.danger {
+            color: #dc3545;
+        }
+        .context-menu-item.danger:hover {
+            background: #fff5f5;
+        }
+        .file-name {
+            cursor: context-menu;
+        }
     </style>
 </head>
 <body>
@@ -812,6 +847,10 @@ function getBrowseHTML(origin, password) {
         </div>
     </div>
 
+    <div id="context-menu" class="context-menu">
+        <div class="context-menu-item danger" onclick="contextMenuDelete()">🗑️ Delete File</div>
+    </div>
+
     <script>
         let searchTimeout;
         const searchInput = document.getElementById('search-input');
@@ -819,6 +858,8 @@ function getBrowseHTML(origin, password) {
         const stats = document.getElementById('stats');
         const password = '${password}';
         let currentEnv = 'all';
+        let contextMenuFilePath = null;
+        const contextMenu = document.getElementById('context-menu');
 
         function getFileEnvironment(filename) {
             if (filename.startsWith('code/staging/')) {
@@ -865,17 +906,17 @@ function getBrowseHTML(origin, password) {
                     if (isHtml) {
                         return \`
                             <div class="file-item">
-                                <div class="file-name" title="\${filename}">\${envBadge}\${filename}</div>
-                                <div class="file-url" title="\${url}" onclick="copyHtmlContent('\${fullPath}', this)">\${url}</div>
-                                <button class="copy-btn" onclick="copyHtmlContent('\${fullPath}', this)">📄 Copy Content</button>
-                            </div>
-                        \`;
-                    } else {
-                        return \`
-                            <div class="file-item">
-                                <div class="file-name" title="\${filename}">\${envBadge}\${filename}</div>
-                                <div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
-                                <button class="copy-btn" onclick="copyToClipboard('\${url}', this)">📋 Copy</button>
+                                <div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyHtmlContent('\${fullPath}', this)">\${envBadge}\${filename}</div>
+				<div class="file-url" title="\${url}" onclick="copyHtmlContent('\${fullPath}', this)">\${url}</div>
+								<button class="copy-btn" onclick="copyHtmlContent('\${fullPath}', this)">📄 Copy Content</button>
+							</div>
+						\`;
+					} else {
+						return \`
+							<div class="file-item">
+								<div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyToClipboard('\${url}', this)">\${envBadge}\${filename}</div>
+								<div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
+								<button class="copy-btn" onclick="copyToClipboard('\${url}', this)">📋 Copy</button>
                             </div>
                         \`;
                     }
@@ -937,47 +978,155 @@ function getBrowseHTML(origin, password) {
             });
         }
 
-        async function copyHtmlContent(filename, element) {
-            try {
-                // Show loading state
-                const originalText = element.textContent;
-                element.textContent = '⏳ Loading...';
-                element.disabled = true;
+		async function copyHtmlContent(filename, element) {
+			try {
+				// Show loading state
+				const originalText = element.textContent;
+				element.textContent = '⏳ Loading...';
+				element.disabled = true;
 
-                // Fetch HTML content
-                const response = await fetch(\`/api/file-content?password=\${encodeURIComponent(password)}&file=\${encodeURIComponent(filename)}\`);
+				// Fetch HTML content
+				const response = await fetch(\`/api/file-content?password=\${encodeURIComponent(password)}&file=\${encodeURIComponent(filename)}\`);
+				const data = await response.json();
+
+				if (data.error) {
+					throw new Error(data.error);
+				}
+
+				// Copy content to clipboard
+				await navigator.clipboard.writeText(data.content);
+
+				// Show success state
+				element.textContent = '✅ Copied!';
+				element.classList.add('copied');
+
+				setTimeout(() => {
+					element.textContent = originalText;
+					element.classList.remove('copied');
+					element.disabled = false;
+				}, 2000);
+
+			} catch (error) {
+				console.error('Failed to copy HTML content:', error);
+
+				// Show error state
+				const originalText = element.textContent;
+				element.textContent = '❌ Error';
+				element.classList.add('copied'); // Use same styling for error
+
+				setTimeout(() => {
+					element.textContent = originalText;
+					element.classList.remove('copied');
+					element.disabled = false;
+				}, 2000);
+			}
+		}
+
+        function showContextMenu(event, filepath) {
+            event.preventDefault();
+            contextMenuFilePath = filepath;
+            
+            const menu = document.getElementById('context-menu');
+            menu.classList.add('show');
+            
+            // Position the menu at cursor
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+        }
+
+        // Close context menu when clicking elsewhere
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-menu')) {
+                contextMenu.classList.remove('show');
+                contextMenuFilePath = null;
+            }
+        });
+
+        // Close context menu on scroll
+        fileList.addEventListener('scroll', () => {
+            contextMenu.classList.remove('show');
+            contextMenuFilePath = null;
+        });
+
+        let deleteConfirmInProgress = false;
+        let deleteConfirmTimeout = null;
+
+        async function contextMenuDelete() {
+            if (!contextMenuFilePath) return;
+            
+            const filepath = contextMenuFilePath;
+            contextMenu.classList.remove('show');
+            contextMenuFilePath = null;
+
+            try {
+                // First click: Ask for confirmation
+                if (!deleteConfirmInProgress) {
+                    deleteConfirmInProgress = true;
+                    
+                    // Show confirmation prompt
+                    const confirmMsg = document.createElement('div');
+                    confirmMsg.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #fff3cd; border: 2px solid #ffc107; padding: 15px 20px; border-radius: 8px; z-index: 2000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-weight: 500;';
+                    confirmMsg.innerHTML = '⚠️ Right-click the file again to confirm deletion';
+                    document.body.appendChild(confirmMsg);
+
+                    // Reset after 4 seconds if not confirmed
+                    deleteConfirmTimeout = setTimeout(() => {
+                        deleteConfirmInProgress = false;
+                        document.body.removeChild(confirmMsg);
+                    }, 4000);
+
+                    return;
+                }
+
+                // Clear the timeout
+                if (deleteConfirmTimeout) {
+                    clearTimeout(deleteConfirmTimeout);
+                    deleteConfirmTimeout = null;
+                }
+
+                deleteConfirmInProgress = false;
+
+                // Second click: Actually delete
+                const loadingMsg = document.createElement('div');
+                loadingMsg.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: white; border: 2px solid #007bff; padding: 15px 20px; border-radius: 8px; z-index: 2000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-weight: 500;';
+                loadingMsg.innerHTML = '⏳ Deleting file...';
+                document.body.appendChild(loadingMsg);
+
+                // Call delete API
+                const response = await fetch(\`/api/delete-file?password=\${encodeURIComponent(password)}&file=\${encodeURIComponent(filepath)}\`, {
+                    method: 'DELETE',
+                });
+
                 const data = await response.json();
 
                 if (data.error) {
                     throw new Error(data.error);
                 }
 
-                // Copy content to clipboard
-                await navigator.clipboard.writeText(data.content);
-
-                // Show success state
-                element.textContent = '✅ Copied!';
-                element.classList.add('copied');
-
+                // Show success
+                loadingMsg.style.background = '#d4edda';
+                loadingMsg.style.borderColor = '#28a745';
+                loadingMsg.innerHTML = '✅ File deleted successfully!';
+                
                 setTimeout(() => {
-                    element.textContent = originalText;
-                    element.classList.remove('copied');
-                    element.disabled = false;
-                }, 2000);
+                    document.body.removeChild(loadingMsg);
+                    loadFiles(searchInput.value, currentEnv);
+                }, 1500);
 
             } catch (error) {
-                console.error('Failed to copy HTML content:', error);
+                console.error('Failed to delete file:', error);
+                
+                deleteConfirmInProgress = false;
 
-                // Show error state
-                const originalText = element.textContent;
-                element.textContent = '❌ Error';
-                element.classList.add('copied'); // Use same styling for error
+                // Show error
+                const errorMsg = document.createElement('div');
+                errorMsg.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #f8d7da; border: 2px solid #dc3545; padding: 15px 20px; border-radius: 8px; z-index: 2000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-weight: 500;';
+                errorMsg.innerHTML = '❌ Failed to delete file';
+                document.body.appendChild(errorMsg);
 
                 setTimeout(() => {
-                    element.textContent = originalText;
-                    element.classList.remove('copied');
-                    element.disabled = false;
-                }, 2000);
+                    document.body.removeChild(errorMsg);
+                }, 3000);
             }
         }
 
@@ -1066,6 +1215,66 @@ export default {
 						return new Response(getBrowsePasswordHTML('An error occurred. Please try again.'), {
 							status: 500,
 							headers: { 'Content-Type': 'text/html' },
+						});
+					}
+				}
+
+				// Method not allowed
+				return new Response('Method Not Allowed', { status: 405 });
+			}
+
+			// Handle delete file API route
+			if (url.pathname === '/api/delete-file') {
+				if (request.method === 'DELETE') {
+					try {
+						// Validate password for API access
+						const password = url.searchParams.get('password');
+						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
+							return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+								status: 401,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						const filename = url.searchParams.get('file');
+						if (!filename) {
+							return new Response(JSON.stringify({ error: 'File parameter required' }), {
+								status: 400,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						// Security check: Only allow deletion of files within the 'code/' directory
+						if (!filename.startsWith('code/')) {
+							return new Response(JSON.stringify({ error: 'Can only delete files in code/ directory' }), {
+								status: 403,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						// Check if file exists
+						const object = await env.CDN_BUCKET.get(filename);
+						if (!object) {
+							return new Response(JSON.stringify({ error: 'File not found' }), {
+								status: 404,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						// Delete the file from R2
+						await env.CDN_BUCKET.delete(filename);
+
+						return new Response(JSON.stringify({ success: true, message: 'File deleted successfully' }), {
+							headers: {
+								'Content-Type': 'application/json',
+								'Cache-Control': 'no-cache',
+							},
+						});
+					} catch (error) {
+						console.error('Delete file API error:', error);
+						return new Response(JSON.stringify({ error: 'Failed to delete file' }), {
+							status: 500,
+							headers: { 'Content-Type': 'application/json' },
 						});
 					}
 				}
