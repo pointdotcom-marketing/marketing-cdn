@@ -144,8 +144,8 @@ function fuzzyMatchPart(filenamePart, queryPart) {
 	return Math.min(score, 1); // Cap at 1.0
 }
 
-// Get list of files from R2 bucket with optional search and environment filters
-async function getFilesList(bucket, search = '', env = 'all') {
+// Get list of files from R2 bucket with optional search, environment, and folder filters
+async function getFilesList(bucket, search = '', env = 'all', folder = 'all') {
 	try {
 		const objects = await bucket.list();
 		let files = objects.objects.map((obj) => obj.key);
@@ -160,6 +160,44 @@ async function getFilesList(bucket, search = '', env = 'all') {
 			files = files.filter((filename) => filename.startsWith('code/') && !filename.startsWith('code/staging/'));
 		}
 
+		// Extract unique folders from file paths (e.g., code/staging/js/app.js -> js or code/prod/js/app.js -> js)
+		const foldersSet = new Set();
+		files.forEach((filename) => {
+			// Remove code/staging/ or code/prod/ prefix
+			let pathAfterEnv = filename;
+			if (filename.startsWith('code/staging/')) {
+				pathAfterEnv = filename.substring('code/staging/'.length);
+			} else if (filename.startsWith('code/prod/')) {
+				pathAfterEnv = filename.substring('code/prod/'.length);
+			} else if (filename.startsWith('code/')) {
+				pathAfterEnv = filename.substring('code/'.length);
+			}
+
+			// Extract first directory (folder) from remaining path
+			const parts = pathAfterEnv.split('/');
+			if (parts.length > 1 && parts[0]) {
+				foldersSet.add(parts[0]);
+			}
+		});
+
+		const folders = Array.from(foldersSet).sort();
+
+		// Filter by folder if specified
+		if (folder !== 'all') {
+			files = files.filter((filename) => {
+				let pathAfterEnv = filename;
+				if (filename.startsWith('code/staging/')) {
+					pathAfterEnv = filename.substring('code/staging/'.length);
+				} else if (filename.startsWith('code/prod/')) {
+					pathAfterEnv = filename.substring('code/prod/'.length);
+				} else if (filename.startsWith('code/')) {
+					pathAfterEnv = filename.substring('code/'.length);
+				}
+				const folderName = pathAfterEnv.split('/')[0];
+				return folderName === folder;
+			});
+		}
+
 		// Filter by search term if provided (fuzzy search)
 		if (search) {
 			files = files.filter((filename) => {
@@ -171,10 +209,10 @@ async function getFilesList(bucket, search = '', env = 'all') {
 		// Sort alphabetically
 		files.sort();
 
-		return files;
+		return { files, folders };
 	} catch (error) {
 		console.error('Error listing files:', error);
-		return [];
+		return { files: [], folders: [] };
 	}
 }
 
@@ -782,6 +820,48 @@ function getBrowseHTML(origin, password) {
             background: #ffc107;
             color: #212529;
         }
+        .folder-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #6c757d;
+            color: white;
+            cursor: pointer;
+            margin-right: 8px;
+            transition: all 0.2s;
+        }
+        .folder-badge:hover {
+            background: #5a6268;
+            transform: translateY(-1px);
+        }
+        .folder-filters {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        .folder-filter-btn {
+            padding: 8px 14px;
+            border: 2px solid #ddd;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .folder-filter-btn:hover {
+            border-color: #6c757d;
+            transform: translateY(-1px);
+        }
+        .folder-filter-btn.active {
+            background: #6c757d;
+            color: white;
+            border-color: #6c757d;
+            box-shadow: 0 2px 4px rgba(108,117,125,0.2);
+        }
         .context-menu {
             position: fixed;
             background: white;
@@ -837,6 +917,12 @@ function getBrowseHTML(origin, password) {
             <div id="stats" class="stats">Loading files...</div>
         </div>
 
+        <div class="controls-bar">
+            <div class="folder-filters" id="folder-filters">
+                <button class="folder-filter-btn active" data-folder="all">All Folders</button>
+            </div>
+        </div>
+
         <div id="file-list" class="file-list">
             <div class="loading">Loading files...</div>
         </div>
@@ -858,6 +944,7 @@ function getBrowseHTML(origin, password) {
         const stats = document.getElementById('stats');
         const password = '${password}';
         let currentEnv = 'all';
+        let currentFolder = 'all';
         let contextMenuFilePath = null;
         const contextMenu = document.getElementById('context-menu');
 
@@ -868,11 +955,33 @@ function getBrowseHTML(origin, password) {
             return 'prod';
         }
 
-        async function loadFiles(search = '', env = currentEnv) {
+        function getFileFolder(filename) {
+            // Extract folder from path like code/staging/js/app.js -> js or code/prod/js/app.js -> js
+            let pathAfterEnv = filename;
+            if (filename.startsWith('code/staging/')) {
+                pathAfterEnv = filename.substring('code/staging/'.length);
+            } else if (filename.startsWith('code/prod/')) {
+                pathAfterEnv = filename.substring('code/prod/'.length);
+            } else if (filename.startsWith('code/')) {
+                pathAfterEnv = filename.substring('code/'.length);
+            }
+            const parts = pathAfterEnv.split('/');
+            return parts.length > 1 && parts[0] ? parts[0] : '';
+        }
+
+        function filterByFolder(folder) {
+            currentFolder = folder;
+            // Update folder filter button active state
+            document.querySelectorAll('.folder-filter-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelector(\`.folder-filter-btn[data-folder="\${folder}"]\`)?.classList.add('active');
+            loadFiles(searchInput.value, currentEnv, currentFolder);
+        }
+
+        async function loadFiles(search = '', env = currentEnv, folder = currentFolder) {
             try {
                 fileList.innerHTML = '<div class="loading">Loading files...</div>';
 
-                const response = await fetch(\`/api/files?password=\${encodeURIComponent(password)}&search=\${encodeURIComponent(search)}&env=\${encodeURIComponent(env)}\`);
+                const response = await fetch(\`/api/files?password=\${encodeURIComponent(password)}&search=\${encodeURIComponent(search)}&env=\${encodeURIComponent(env)}&folder=\${encodeURIComponent(folder)}\`);
                 const data = await response.json();
 
                 if (data.error) {
@@ -882,14 +991,33 @@ function getBrowseHTML(origin, password) {
                 }
 
                 const files = data.files || [];
+                const folders = data.folders || [];
+
+                // Update folder filter buttons dynamically
+                const folderFiltersContainer = document.getElementById('folder-filters');
+                folderFiltersContainer.innerHTML = '<button class="folder-filter-btn' + (folder === 'all' ? ' active' : '') + '" data-folder="all">All Folders</button>';
+                folders.forEach(f => {
+                    folderFiltersContainer.innerHTML += \`<button class="folder-filter-btn\${folder === f ? ' active' : ''}" data-folder="\${f}">\${f}</button>\`;
+                });
+
+                // Add click handlers to folder filter buttons
+                document.querySelectorAll('.folder-filter-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        filterByFolder(btn.dataset.folder);
+                    });
+                });
 
                 if (files.length === 0) {
                     fileList.innerHTML = '<div class="no-files">No files found</div>';
-                    stats.textContent = search ? \`No files match "\${search}"\` : 'No files in CDN';
+                    const folderContext = folder !== 'all' ? \` in "\${folder}"\` : '';
+                    const envContext = env !== 'all' ? \` (\${env})\` : '';
+                    stats.textContent = search ? \`No files match "\${search}"\${folderContext}\${envContext}\` : \`No files in CDN\${folderContext}\${envContext}\`;
                     return;
                 }
 
-                stats.textContent = \`Found \${files.length} file\${files.length === 1 ? '' : 's'}\${search ? \` matching "\${search}"\` : ''}\`;
+                const folderContext = folder !== 'all' ? \` in "\${folder}"\` : '';
+                const envContext = env !== 'all' ? \` (\${env})\` : '';
+                stats.textContent = \`Found \${files.length} file\${files.length === 1 ? '' : 's'}\${search ? \` matching "\${search}"\` : ''}\${folderContext}\${envContext}\`;
 
                 fileList.innerHTML = files.map(url => {
                     const filename = url.split('/').pop();
@@ -898,6 +1026,10 @@ function getBrowseHTML(origin, password) {
                     const fullPath = url.startsWith(originPrefix) ? url.substring(originPrefix.length) : url;
                     const env = getFileEnvironment(fullPath);
                     const envBadge = env === 'staging' ? '<span class="env-badge staging">staging</span>' : '<span class="env-badge prod">prod</span>';
+                    
+                    // Get folder and create folder badge
+                    const folderName = getFileFolder(fullPath);
+                    const folderBadge = folderName ? \`<span class="folder-badge" onclick="filterByFolder('\${folderName}')">\${folderName}</span>\` : '';
 
                     // Check if file is HTML
                     const extension = filename.split('.').pop().toLowerCase();
@@ -906,7 +1038,7 @@ function getBrowseHTML(origin, password) {
                     if (isHtml) {
                         return \`
                             <div class="file-item">
-                                <div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyHtmlContent('\${fullPath}', this)">\${envBadge}\${filename}</div>
+                                <div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyHtmlContent('\${fullPath}', this)">\${envBadge}\${folderBadge}\${filename}</div>
 				<div class="file-url" title="\${url}" onclick="copyHtmlContent('\${fullPath}', this)">\${url}</div>
 								<button class="copy-btn" onclick="copyHtmlContent('\${fullPath}', this)">📄 Copy Content</button>
 							</div>
@@ -914,7 +1046,7 @@ function getBrowseHTML(origin, password) {
 					} else {
 						return \`
 							<div class="file-item">
-								<div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyToClipboard('\${url}', this)">\${envBadge}\${filename}</div>
+								<div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyToClipboard('\${url}', this)">\${envBadge}\${folderBadge}\${filename}</div>
 								<div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
 								<button class="copy-btn" onclick="copyToClipboard('\${url}', this)">📋 Copy</button>
                             </div>
@@ -1158,7 +1290,7 @@ function getBrowseHTML(origin, password) {
 
                 // Update current environment and reload files
                 currentEnv = btn.dataset.env;
-                loadFiles(searchInput.value, currentEnv);
+                loadFiles(searchInput.value, currentEnv, currentFolder);
             });
         });
     </script>
@@ -1298,10 +1430,11 @@ export default {
 
 						const search = url.searchParams.get('search') || '';
 						const envFilter = url.searchParams.get('env') || 'all';
-						const files = await getFilesList(env.CDN_BUCKET, search, envFilter);
+						const folderFilter = url.searchParams.get('folder') || 'all';
+						const { files, folders } = await getFilesList(env.CDN_BUCKET, search, envFilter, folderFilter);
 						const cdnUrls = files.map((filename) => `${url.origin}/${filename}`);
 
-						return new Response(JSON.stringify({ files: cdnUrls }), {
+						return new Response(JSON.stringify({ files: cdnUrls, folders }), {
 							headers: {
 								'Content-Type': 'application/json',
 								'Cache-Control': 'no-cache',
