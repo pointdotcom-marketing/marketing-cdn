@@ -31,6 +31,7 @@ const ALLOWED_ORIGINS = [
 	'https://files.point.com',
 	'https://scorecredit.com',
 	'https://scorecredit.webflow.io',
+	'https://canvas.webflow.com',
 ];
 
 // Check if origin is a valid Webflow branch containing "new-point"
