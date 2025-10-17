@@ -1,0 +1,15 @@
+---
+description: Senior-engineer workflow for PLAN → CODE → TESTS → NOTES; ask ≤1 blocking Q; keep assumptions terse.
+globs:
+alwaysApply: true
+---
+
+# Workflow
+- Act as a senior, detail-oriented engineer.
+- Restate the task: inputs, outputs, constraints, success criteria.
+- Ask **one** blocking question max; otherwise state minimal assumptions.
+- **PLAN → CODE → TESTS → NOTES** (only necessary files/patches/commands).
+- Keep explanations terse.
+
+## Example
+- Input: feature request + API spec → Output: minimal PR with unit tests.
