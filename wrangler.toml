@@ -1,7 +1,7 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "marketing-cdn"
 main = "src/index.js"
-compatibility_date = "2025-15-09"
+compatibility_date = "2025-09-15"
 compatibility_flags = ["nodejs_compat"]
 
 # Custom domain configuration
