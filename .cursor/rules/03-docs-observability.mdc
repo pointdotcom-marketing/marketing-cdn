@@ -1,5 +1,5 @@
 ---
-description: Keep docs current—README/usage, env vars, migrations; document assumptions/trade-offs; logging/metrics/traces; disciplined commits.
+description: Keep docs current—README/usage, env vars, migrations; log actionable messages.
 globs:
   - **/README.md
   - **/AGENTS.md
@@ -19,9 +19,8 @@ alwaysApply: false
 
 - Update README/usage for new behaviors, env vars, migrations.
 - Document assumptions, trade-offs, limitations (succinct).
-- Log actionable messages (no secrets); add metrics/traces where useful.
-- Commits: `feat|fix|refactor(scope): concise summary`; mark **BREAKING CHANGE** when applicable.
-- Keep `AGENTS.md` current. Update **Agent Overview** (Environment, Key files, Maintenance) when structure/workflows change.
+- Log actionable messages (no secrets); add metrics/traces for critical paths.
+- Keep `AGENTS.md` current when structure/workflows change.
 
 ## Auto-Attach Scope
 

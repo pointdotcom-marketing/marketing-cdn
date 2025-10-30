@@ -1,0 +1,29 @@
+---
+description: Code standards—quality, safety, testing; scale rigor with task complexity.
+globs:
+alwaysApply: true
+---
+
+# Code Standards
+
+## Quality
+- Clear, idiomatic, maintainable; descriptive names; **strict typing**.
+- Small, composable functions; avoid over-engineering.
+- Focused diffs; follow existing patterns; fix linter warnings.
+
+## Safety (scale with risk)
+- **Always:** Handle errors, null/undefined; validate inputs.
+- **User-facing/APIs:** Validate schemas (Zod/Yup), sanitize output.
+- **Auth/payments:** Add XSS/CSRF/injection guards, secrets hygiene.
+- Clean up I/O resources (files, sockets, connections).
+
+## Testing (scale with scope)
+- **Refactors/utilities:** Add unit tests covering happy + edge cases.
+- **New features/APIs:** Add integration tests; mock externals.
+- **Bug fixes:** Add regression test.
+- **Simple UI tweaks:** Manual verification OK; skip tests if trivial.
+- Keep tests fast & deterministic (prefer bunx/bun).
+
+## Example
+- Fix typo in button text → no test needed.
+- Add API endpoint → validate input schema, add unit + integration tests, handle timeouts.
