@@ -424,14 +424,14 @@ const UPLOAD_FORM_HTML = `
         </div>
         <div class="info-panels">
             <div class="info-panel where">
-                <strong>Where files go</strong>
-                Files are uploaded to the Point CDN and immediately available at:<br>
+                <strong>Your CDN URL</strong>
+                Your file will be available at:<br>
                 <code>https://files.point.com/&lt;filename&gt;</code><br>
-                Spaces in filenames are auto-converted to dashes — e.g. <code>my file.png</code> becomes <code>my-file.png</code>.
+                Spaces are replaced with dashes — e.g. <code>my file.png</code> becomes <code>my-file.png</code>.
             </div>
             <div class="info-panel naming">
                 <strong>Duplicate filenames</strong>
-                Files are never overwritten. If a filename already exists, a number is appended automatically — e.g. <code>logo.png</code> becomes <code>logo-1.png</code>.
+                Files are never overwritten. If a filename already exists, a number is added — e.g. <code>logo.png</code> becomes <code>logo-1.png</code>.
             </div>
         </div>
         <form method="POST" enctype="multipart/form-data">
