@@ -214,29 +214,29 @@ async function getFileStats(bucket, filepath) {
 async function getFilesList(bucket, search = '', env = 'all', folder = 'all') {
 	try {
 		const objects = await bucket.list();
-		let files = objects.objects.map((obj) => obj.key);
+		let files = objects.objects.map((obj) => ({ key: obj.key, uploaded: obj.uploaded }));
 
 		// Only include files within the 'code/' directory and its subdirectories
-		files = files.filter((filename) => filename.startsWith('code/'));
+		files = files.filter((file) => file.key.startsWith('code/'));
 
 		// Filter by environment (staging/prod/all)
 		if (env === 'staging') {
-			files = files.filter((filename) => filename.startsWith('code/staging/'));
+			files = files.filter((file) => file.key.startsWith('code/staging/'));
 		} else if (env === 'prod') {
-			files = files.filter((filename) => filename.startsWith('code/') && !filename.startsWith('code/staging/'));
+			files = files.filter((file) => file.key.startsWith('code/') && !file.key.startsWith('code/staging/'));
 		}
 
 		// Extract unique folders from file paths (e.g., code/staging/js/app.js -> js or code/prod/js/app.js -> js)
 		const foldersSet = new Set();
-		files.forEach((filename) => {
+		files.forEach((file) => {
 			// Remove code/staging/ or code/prod/ prefix
-			let pathAfterEnv = filename;
-			if (filename.startsWith('code/staging/')) {
-				pathAfterEnv = filename.substring('code/staging/'.length);
-			} else if (filename.startsWith('code/prod/')) {
-				pathAfterEnv = filename.substring('code/prod/'.length);
-			} else if (filename.startsWith('code/')) {
-				pathAfterEnv = filename.substring('code/'.length);
+			let pathAfterEnv = file.key;
+			if (file.key.startsWith('code/staging/')) {
+				pathAfterEnv = file.key.substring('code/staging/'.length);
+			} else if (file.key.startsWith('code/prod/')) {
+				pathAfterEnv = file.key.substring('code/prod/'.length);
+			} else if (file.key.startsWith('code/')) {
+				pathAfterEnv = file.key.substring('code/'.length);
 			}
 
 			// Extract first directory (folder) from remaining path
@@ -250,14 +250,14 @@ async function getFilesList(bucket, search = '', env = 'all', folder = 'all') {
 
 		// Filter by folder if specified
 		if (folder !== 'all') {
-			files = files.filter((filename) => {
-				let pathAfterEnv = filename;
-				if (filename.startsWith('code/staging/')) {
-					pathAfterEnv = filename.substring('code/staging/'.length);
-				} else if (filename.startsWith('code/prod/')) {
-					pathAfterEnv = filename.substring('code/prod/'.length);
-				} else if (filename.startsWith('code/')) {
-					pathAfterEnv = filename.substring('code/'.length);
+			files = files.filter((file) => {
+				let pathAfterEnv = file.key;
+				if (file.key.startsWith('code/staging/')) {
+					pathAfterEnv = file.key.substring('code/staging/'.length);
+				} else if (file.key.startsWith('code/prod/')) {
+					pathAfterEnv = file.key.substring('code/prod/'.length);
+				} else if (file.key.startsWith('code/')) {
+					pathAfterEnv = file.key.substring('code/'.length);
 				}
 				const folderName = pathAfterEnv.split('/')[0];
 				return folderName === folder;
@@ -266,14 +266,14 @@ async function getFilesList(bucket, search = '', env = 'all', folder = 'all') {
 
 		// Filter by search term if provided (fuzzy search)
 		if (search) {
-			files = files.filter((filename) => {
-				const score = fuzzyScore(filename, search);
+			files = files.filter((file) => {
+				const score = fuzzyScore(file.key, search);
 				return score > 0.2; // Minimum threshold for fuzzy matches
 			});
 		}
 
-		// Sort alphabetically
-		files.sort();
+		// Sort alphabetically by key
+		files.sort((a, b) => a.key.localeCompare(b.key));
 
 		return { files, folders };
 	} catch (error) {
@@ -338,20 +338,80 @@ const UPLOAD_FORM_HTML = `
         button:hover {
             background: #0056b3;
         }
-        .info {
+        .info-panels {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+        .info-panel {
+            padding: 12px 15px;
+            border-radius: 6px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .info-panel strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .info-panel.where {
             background: #e7f3ff;
-            padding: 15px;
+            color: #0056b3;
+            border-left: 3px solid #0056b3;
+        }
+        .info-panel.naming {
+            background: #fff8e1;
+            color: #795500;
+            border-left: 3px solid #f59e0b;
+        }
+        .info-panel.limits {
+            background: #f0fdf4;
+            color: #166534;
+            border-left: 3px solid #22c55e;
+        }
+        .info-panel code {
+            font-family: monospace;
+            background: rgba(0,0,0,0.07);
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+        .copy-hint {
+            background: #007bff;
+            color: white;
+            padding: 10px 15px;
             border-radius: 6px;
             margin-bottom: 20px;
-            color: #0056b3;
+            font-size: 14px;
+            font-weight: 500;
+            text-align: center;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📁 Point CDN File Upload</h1>
-        <div class="info">
-            Upload files to the CDN. After upload, you'll get a shareable link.
+        <div class="copy-hint">
+            After upload, your CDN URL will be automatically copied to your clipboard.
+        </div>
+        <div class="info-panels">
+            <div class="info-panel where">
+                <strong>Where files go</strong>
+                Files are uploaded to the Point CDN and immediately available at:<br>
+                <code>https://files.point.com/&lt;filename&gt;</code>
+            </div>
+            <div class="info-panel naming">
+                <strong>Duplicate filenames</strong>
+                Files are never overwritten. If a filename already exists, a number is appended automatically — e.g. <code>logo.png</code> becomes <code>logo-1.png</code>.
+            </div>
+            <div class="info-panel limits">
+                <strong>Limits</strong>
+                Max file size: <code>100 MB</code> &nbsp;·&nbsp;
+                Accepted types: Images (<code>.png .jpg .gif .svg .webp</code>), Documents (<code>.pdf</code>), Video (<code>.mp4</code>)
+            </div>
         </div>
         <form method="POST" enctype="multipart/form-data">
             <div class="form-group">
@@ -414,31 +474,40 @@ function getSuccessHTML(filename, cdnUrl) {
             font-size: 14px;
             box-sizing: border-box;
         }
-        .button-group {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-        }
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            text-decoration: none;
-            text-align: center;
-            font-size: 14px;
-            flex: 1;
-        }
-        .btn-primary {
+        .btn-copy {
+            display: block;
+            width: 100%;
+            padding: 16px;
             background: #007bff;
             color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            box-sizing: border-box;
+            margin-top: 16px;
+            transition: background 0.2s;
         }
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
+        .btn-copy:hover {
+            background: #0056b3;
         }
-        .btn:hover {
-            opacity: 0.9;
+        .btn-copy.copied {
+            background: #28a745;
+        }
+        .secondary-links {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 16px;
+            font-size: 14px;
+        }
+        .secondary-links a {
+            color: #6c757d;
+            text-decoration: none;
+        }
+        .secondary-links a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
@@ -446,40 +515,53 @@ function getSuccessHTML(filename, cdnUrl) {
     <div class="container">
         <h1>✅ Upload Successful!</h1>
         <div class="success">
-            File "${filename}" has been uploaded successfully.
+            File "<strong>${filename}</strong>" has been uploaded successfully.
         </div>
-        
+
         <div class="url-container">
             <label for="cdn-url"><strong>Your CDN URL:</strong></label>
             <input type="text" id="cdn-url" class="url-input" value="${cdnUrl}" readonly onclick="this.select()">
         </div>
-        
-        <div class="button-group">
-            <button class="btn btn-primary" onclick="copyToClipboard()">📋 Copy URL</button>
-            <a href="${cdnUrl}" target="_blank" class="btn btn-secondary">🔗 Open File</a>
-        </div>
-        
-        <div style="margin-top: 20px; text-align: center;">
+
+        <button class="btn-copy" id="copy-btn" onclick="copyToClipboard()">📋 Copy URL</button>
+
+        <div class="secondary-links">
+            <a href="${cdnUrl}" target="_blank">🔗 Open File</a>
             <a href="/upload">← Upload Another File</a>
         </div>
     </div>
-    
+
     <script>
         function copyToClipboard() {
             const urlInput = document.getElementById('cdn-url');
+            const btn = document.getElementById('copy-btn');
             urlInput.select();
-            document.execCommand('copy');
-            
-            const btn = event.target;
-            const originalText = btn.textContent;
-            btn.textContent = '✅ Copied!';
-            btn.style.background = '#28a745';
-            
+            navigator.clipboard.writeText(urlInput.value).catch(() => {
+                document.execCommand('copy');
+            });
+            btn.textContent = '✅ Copied to clipboard!';
+            btn.classList.add('copied');
             setTimeout(() => {
-                btn.textContent = originalText;
-                btn.style.background = '#007bff';
-            }, 2000);
+                btn.textContent = '📋 Copy URL';
+                btn.classList.remove('copied');
+            }, 3000);
         }
+
+        // Auto-copy on page load
+        window.addEventListener('load', () => {
+            const urlInput = document.getElementById('cdn-url');
+            const btn = document.getElementById('copy-btn');
+            navigator.clipboard.writeText(urlInput.value).then(() => {
+                btn.textContent = '✅ Copied to clipboard!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = '📋 Copy URL';
+                    btn.classList.remove('copied');
+                }, 3000);
+            }).catch(() => {
+                // Clipboard API may be blocked; leave button in default state
+            });
+        });
     </script>
 </body>
 </html>
@@ -755,6 +837,13 @@ function getBrowseHTML(origin, password) {
         }
 		.copy-btn.copied {
 			background: #28a745;
+		}
+		.file-date {
+			font-size: 0.75rem;
+			color: #999;
+			margin-left: auto;
+			padding-left: 15px;
+			white-space: nowrap;
 		}
         @media (max-width: 1024px) {
             .file-item {
@@ -1130,6 +1219,17 @@ function getBrowseHTML(origin, password) {
             return parts.length > 1 && parts[0] ? parts[0] : '';
         }
 
+        function formatDate(isoString) {
+            if (!isoString) return '';
+            return new Date(isoString).toLocaleString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+            });
+        }
+
         function filterByFolder(folder) {
             currentFolder = folder;
             // Update folder filter button active state
@@ -1180,7 +1280,9 @@ function getBrowseHTML(origin, password) {
                 const envContext = env !== 'all' ? \` (\${env})\` : '';
                 stats.textContent = \`Found \${files.length} file\${files.length === 1 ? '' : 's'}\${search ? \` matching "\${search}"\` : ''}\${folderContext}\${envContext}\`;
 
-                fileList.innerHTML = files.map(url => {
+                fileList.innerHTML = files.map(fileItem => {
+                    const url = fileItem.url;
+                    const lastModified = fileItem.lastModified;
                     const filename = url.split('/').pop();
                     // Remove the origin from the URL to get the path
                     const originPrefix = window.location.origin + '/';
@@ -1192,6 +1294,10 @@ function getBrowseHTML(origin, password) {
                     const folderName = getFileFolder(fullPath);
                     const folderBadge = folderName ? \`<span class="folder-badge" onclick="filterByFolder('\${folderName}')">\${folderName}</span>\` : '';
 
+                    // Format the last modified date
+                    const formattedDate = formatDate(lastModified);
+                    const dateDisplay = formattedDate ? \`<span class="file-date">\${formattedDate}</span>\` : '';
+
                     // Check if file is HTML
                     const extension = filename.split('.').pop().toLowerCase();
                     const isHtml = extension === 'html' || extension === 'htm';
@@ -1199,7 +1305,7 @@ function getBrowseHTML(origin, password) {
                     if (isHtml) {
                         return \`
                             <div class="file-item">
-                                <div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyHtmlContent('\${fullPath}', this)">\${envBadge}\${folderBadge}\${filename}</div>
+                                <div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyHtmlContent('\${fullPath}', this)">\${envBadge}\${folderBadge}\${filename}\${dateDisplay}</div>
 				<div class="file-url" title="\${url}" onclick="copyHtmlContent('\${fullPath}', this)">\${url}</div>
 								<button class="copy-btn" onclick="copyHtmlContent('\${fullPath}', this)">📄 Copy Content</button>
 							</div>
@@ -1207,7 +1313,7 @@ function getBrowseHTML(origin, password) {
 					} else {
 						return \`
 							<div class="file-item">
-								<div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyToClipboard('\${url}', this)">\${envBadge}\${folderBadge}\${filename}</div>
+								<div class="file-name" title="\${filename}" data-filepath="\${fullPath}" oncontextmenu="showContextMenu(event, '\${fullPath}')" onclick="copyToClipboard('\${url}', this)">\${envBadge}\${folderBadge}\${filename}\${dateDisplay}</div>
 								<div class="file-url" title="\${url}" onclick="copyToClipboard('\${url}', this)">\${url}</div>
 								<button class="copy-btn" onclick="copyToClipboard('\${url}', this)">📋 Copy</button>
                             </div>
@@ -1661,18 +1767,21 @@ export default {
 							});
 						}
 
-						const search = url.searchParams.get('search') || '';
-						const envFilter = url.searchParams.get('env') || 'all';
-						const folderFilter = url.searchParams.get('folder') || 'all';
-						const { files, folders } = await getFilesList(env.CDN_BUCKET, search, envFilter, folderFilter);
-						const cdnUrls = files.map((filename) => `${url.origin}/${filename}`);
+					const search = url.searchParams.get('search') || '';
+					const envFilter = url.searchParams.get('env') || 'all';
+					const folderFilter = url.searchParams.get('folder') || 'all';
+					const { files, folders } = await getFilesList(env.CDN_BUCKET, search, envFilter, folderFilter);
+					const fileData = files.map(({ key, uploaded }) => ({
+						url: `${url.origin}/${key}`,
+						lastModified: uploaded,
+					}));
 
-						return new Response(JSON.stringify({ files: cdnUrls, folders }), {
-							headers: {
-								'Content-Type': 'application/json',
-								'Cache-Control': 'no-cache',
-							},
-						});
+					return new Response(JSON.stringify({ files: fileData, folders }), {
+						headers: {
+							'Content-Type': 'application/json',
+							'Cache-Control': 'no-cache',
+						},
+					});
 					} catch (error) {
 						console.error('Files API error:', error);
 						return new Response(JSON.stringify({ error: 'Failed to fetch files' }), {
