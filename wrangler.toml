@@ -1,6 +1,7 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "marketing-cdn"
 main = "src/index.js"
+account_id = "1df4880142e9b3ccb4341bf7e97c57ff"
 compatibility_date = "2025-09-15"
 compatibility_flags = ["nodejs_compat"]
 
