@@ -51,6 +51,13 @@ function isValidWebflowBranch(origin) {
 	}
 }
 
+// Font assets must be publicly usable by external rendering services such as Lob.
+// Keep this scoped to the dedicated staging/prod font directories so other code
+// assets retain the existing origin allowlist.
+export function isPublicFontAsset(path) {
+	return /^code\/(?:staging|prod)\/fonts\//.test(path);
+}
+
 // Generate unique filename by adding -1, -2, etc. if file exists
 async function getUniqueFilename(bucket, originalName) {
 	// Replace spaces with dashes for cleaner URLs
@@ -2366,9 +2373,10 @@ export default {
 			const origin = request.headers.get('Origin');
 
 			// CORS: code/ files are restricted to allowed origins only.
-			// All other files are publicly accessible from any origin.
+			// Font directory assets and all non-code files are public to any origin.
 			const isCodeFile = path.startsWith('code/');
-			if (isCodeFile) {
+			const isPublicFontFile = isPublicFontAsset(path);
+			if (isCodeFile && !isPublicFontFile) {
 				const referer = request.headers.get('Referer');
 				const isCrossOriginRequest = origin || referer;
 				if (isCrossOriginRequest) {
@@ -2395,9 +2403,9 @@ export default {
 			});
 
 			// Set CORS headers based on file type:
-			// - code/ files: only allowed origins get a reflected Access-Control-Allow-Origin
-			// - all other files: open to any origin (public CDN assets)
-			if (isCodeFile) {
+			// - font directory and non-code files: open to any origin
+			// - all other code/ files: only allowed origins get a reflected header
+			if (isCodeFile && !isPublicFontFile) {
 				if (origin && (ALLOWED_ORIGINS.includes(origin) || isValidWebflowBranch(origin))) {
 					headers.set('Access-Control-Allow-Origin', origin);
 					headers.set('Vary', 'Origin');

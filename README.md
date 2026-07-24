@@ -225,6 +225,8 @@ wrangler dev
 ### CORS Handling
 
 - **Origin Validation**: Checks against predefined allowed origins list
+- **Public Font Assets**: Files under `code/staging/fonts/` and
+  `code/prod/fonts/` return `Access-Control-Allow-Origin: *`
 - **Referer Fallback**: Uses referer header when origin is not present
 - **Vary Headers**: Proper cache variation for cross-origin requests
 
