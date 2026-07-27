@@ -18,6 +18,11 @@ const CONTENT_TYPES = {
 	mp4: 'video/mp4',
 };
 
+// CDN URLs are mutable: browsers must revalidate them, while Cloudflare can
+// retain an edge copy until the deployment workflow purges the updated URL.
+export const BROWSER_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
+export const CLOUDFLARE_CACHE_CONTROL = 'public, max-age=31536000';
+
 // File types that should be previewed in browser
 const PREVIEW_TYPES = new Set(['pdf', 'html', 'htm', 'jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'mp4']);
 
@@ -2397,7 +2402,8 @@ export default {
 			// Prepare headers with caching
 			const headers = new Headers({
 				'Content-Type': contentType,
-				'Cache-Control': 'public, max-age=31536000',
+				'Cache-Control': BROWSER_CACHE_CONTROL,
+				'Cloudflare-CDN-Cache-Control': CLOUDFLARE_CACHE_CONTROL,
 				ETag: object.httpEtag,
 				'Last-Modified': object.uploaded.toUTCString(),
 			});
