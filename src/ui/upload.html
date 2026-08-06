@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Upload - Point CDN</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .info-panel {
+            padding: 12px 15px;
+            border-radius: 6px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .info-panel strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .info-panel.where {
+            background: #e7f3ff;
+            color: #0056b3;
+            border-left: 3px solid #0056b3;
+        }
+        .info-panel.naming {
+            background: #fff8e1;
+            color: #795500;
+            border-left: 3px solid #f59e0b;
+        }
+        .info-panel code {
+            font-family: monospace;
+            background: rgba(0,0,0,0.07);
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+        .copy-hint {
+            background: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            text-align: center;
+        }
+        .info-panels {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📁 Point CDN File Upload</h1>
+        <div class="copy-hint">
+            After upload, your CDN URL will be automatically copied to your clipboard.
+        </div>
+        <div class="info-panels">
+            <div class="info-panel where">
+                <strong>Your CDN URL</strong>
+                Your file will be available at:<br>
+                <code>https://files.point.com/&lt;filename&gt;</code><br>
+                Spaces are replaced with dashes — e.g. <code>my file.png</code> becomes <code>my-file.png</code>.
+            </div>
+            <div class="info-panel naming">
+                <strong>Duplicate filenames</strong>
+                Files are never overwritten. If a filename already exists, a number is added — e.g. <code>logo.png</code> becomes <code>logo-1.png</code>.
+            </div>
+        </div>
+        <form method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="file">Choose File:</label>
+                <input type="file" id="file" name="file" required>
+                <div style="margin-top: 6px; font-size: 12px; color: #999;">
+                    Max 100 MB &nbsp;·&nbsp; Images (.png .jpg .gif .svg .webp), Documents (.pdf), Video (.mp4)
+                </div>
+            </div>
+            <button type="submit">Upload File</button>
+        </form>
+        <div style="text-align: center; margin-top: 20px; font-size: 14px;">
+            <a href="/browse" style="color: #007bff; text-decoration: none;">Browse uploaded files →</a>
+        </div>
+    </div>
+</body>
+</html>

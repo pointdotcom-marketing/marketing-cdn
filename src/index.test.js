@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'vitest';
-import worker, { BROWSER_CACHE_CONTROL, CLOUDFLARE_CACHE_CONTROL, isPublicFontAsset, verifyPassword } from './index.js';
+import worker, {
+	BROWSER_CACHE_CONTROL,
+	CLOUDFLARE_CACHE_CONTROL,
+	escapeHtml,
+	isPublicFontAsset,
+	verifyPassword,
+} from './index.js';
+import codeBrowserHtml from './ui/code-browser.html';
+import browseFilesHtml from './ui/browse-files.html';
 
 const PASSWORDS = {
 	CODE_PASSWORD: 'code-secret',
@@ -14,6 +22,11 @@ function authRequest(path, password) {
 	});
 }
 
+async function authenticatedCookie(path, password) {
+	const loginResponse = await worker.fetch(authRequest(path, password), PASSWORDS);
+	return loginResponse.headers.get('Set-Cookie').split(';')[0];
+}
+
 describe('CDN cache policy', () => {
 	test('requires browser revalidation while retaining a long-lived Cloudflare copy', () => {
 		expect(BROWSER_CACHE_CONTROL).toBe('public, max-age=0, must-revalidate');
@@ -21,26 +34,105 @@ describe('CDN cache policy', () => {
 	});
 });
 
-describe('per-file request stats', () => {
-	test('serving a code asset no longer writes analytics objects to the bucket', async () => {
+describe('escapeHtml', () => {
+	test('escapes characters that break HTML text and attributes', () => {
+		expect(escapeHtml(`<img src=x onerror="alert('xss')"> & "quotes"`)).toBe(
+			'&lt;img src=x onerror=&quot;alert(&#39;xss&#39;)&quot;&gt; &amp; &quot;quotes&quot;'
+		);
+	});
+});
+
+describe('admin UI templates', () => {
+	test('code browser avoids interpolating user data into inline handlers', () => {
+		expect(codeBrowserHtml).not.toMatch(/onclick="copyToClipboard\(/);
+		expect(codeBrowserHtml).not.toMatch(/onclick="copyHtmlContent\(/);
+		expect(codeBrowserHtml).not.toMatch(/oncontextmenu="showContextMenu\(/);
+		expect(codeBrowserHtml).not.toMatch(/onclick="filterByFolder\(/);
+		expect(codeBrowserHtml).not.toContain('__ORIGIN__');
+		expect(codeBrowserHtml).toContain('data-action="copy-url"');
+		expect(codeBrowserHtml).toContain('href="/"');
+
+		const script = codeBrowserHtml.slice(
+			codeBrowserHtml.lastIndexOf('<script>') + '<script>'.length,
+			codeBrowserHtml.lastIndexOf('</script>')
+		);
+		expect(() => new Function(script)).not.toThrow();
+	});
+
+	test('browse files escapes dynamic values and keeps data-url copy buttons', () => {
+		expect(browseFilesHtml).toContain('escapeHtml');
+		expect(browseFilesHtml).toContain('data-url=');
+		const script = browseFilesHtml.slice(
+			browseFilesHtml.lastIndexOf('<script>') + '<script>'.length,
+			browseFilesHtml.lastIndexOf('</script>')
+		);
+		expect(() => new Function(script)).not.toThrow();
+	});
+});
+
+describe('asset serving', () => {
+	test('serves code assets with cache headers and does not write analytics', async () => {
 		const writes = [];
 		const env = {
 			...PASSWORDS,
 			CDN_BUCKET: {
-				get: async () => ({ body: 'file-body', httpEtag: '"etag"', uploaded: new Date(), size: 9 }),
+				get: async () => ({ body: 'console.log(1)', httpEtag: '"etag"', uploaded: new Date('2024-01-01'), size: 14 }),
 				put: async (key) => writes.push(key),
 			},
 		};
 
 		const response = await worker.fetch(new Request('https://files.point.com/code/prod/js/app.js'), env);
 		expect(response.status).toBe(200);
+		expect(await response.text()).toBe('console.log(1)');
+		expect(response.headers.get('Content-Type')).toBe('application/javascript');
+		expect(response.headers.get('Cache-Control')).toBe(BROWSER_CACHE_CONTROL);
+		expect(response.headers.get('Cloudflare-CDN-Cache-Control')).toBe(CLOUDFLARE_CACHE_CONTROL);
 		expect(writes).toEqual([]);
 	});
 
-	test('the stats endpoint is no longer routed', async () => {
+	test('redirects missing assets to point.com', async () => {
+		const env = { ...PASSWORDS, CDN_BUCKET: { get: async () => null } };
+		const response = await worker.fetch(new Request('https://files.point.com/missing/file.js'), env);
+		expect(response.status).toBe(302);
+		expect(response.headers.get('Location')).toMatch(/^https:\/\/point\.com\/?$/);
+	});
+
+	test('blocks disallowed origins for non-font code assets', async () => {
+		const env = {
+			...PASSWORDS,
+			CDN_BUCKET: {
+				get: async () => ({ body: 'x', httpEtag: '"e"', uploaded: new Date(), size: 1 }),
+			},
+		};
+		const response = await worker.fetch(
+			new Request('https://files.point.com/code/prod/js/app.js', {
+				headers: { Origin: 'https://evil.example' },
+			}),
+			env
+		);
+		expect(response.status).toBe(403);
+	});
+
+	test('allows public font assets from any origin', async () => {
+		const env = {
+			...PASSWORDS,
+			CDN_BUCKET: {
+				get: async () => ({ body: 'font', httpEtag: '"e"', uploaded: new Date(), size: 4 }),
+			},
+		};
+		const response = await worker.fetch(
+			new Request('https://files.point.com/code/prod/fonts/CircularStd-Book.woff', {
+				headers: { Origin: 'https://evil.example' },
+			}),
+			env
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+	});
+
+	test('the removed stats endpoint is no longer routed', async () => {
 		const env = { ...PASSWORDS, CDN_BUCKET: { get: async () => null } };
 		const response = await worker.fetch(new Request('https://files.point.com/api/file-stats?file=code/prod/a.js'), env);
-		// Falls through to asset serving, where a missing object redirects to point.com.
 		expect(response.status).toBe(302);
 	});
 });
@@ -169,9 +261,8 @@ describe('browser authentication', () => {
 		expect(await browseResponse.text()).toContain('Point CDN Files');
 	});
 
-	test('the code browser renders a parseable inline script with no stats UI', async () => {
-		const loginResponse = await worker.fetch(authRequest('/code', PASSWORDS.CODE_PASSWORD), PASSWORDS);
-		const cookie = loginResponse.headers.get('Set-Cookie').split(';')[0];
+	test('the code browser page is served from the HTML module with a parseable script', async () => {
+		const cookie = await authenticatedCookie('/code', PASSWORDS.CODE_PASSWORD);
 		const pageResponse = await worker.fetch(
 			new Request('https://files.point.com/code', {
 				headers: { Cookie: cookie },
@@ -180,14 +271,48 @@ describe('browser authentication', () => {
 		);
 		const page = await pageResponse.text();
 
-		// The page is a template literal, so a malformed edit only surfaces when the
-		// inline script is parsed. new Function throws a SyntaxError if it is broken.
 		const script = page.slice(page.lastIndexOf('<script>') + '<script>'.length, page.lastIndexOf('</script>'));
 		expect(script.length).toBeGreaterThan(100);
 		expect(() => new Function(script)).not.toThrow();
 
 		expect(page).toContain('Delete File');
+		expect(page).toContain('data-action="copy-url"');
 		expect(page).not.toContain('View Stats');
+		expect(page).not.toContain('__ORIGIN__');
+		expect(page).not.toContain('__BROWSER_NAME__');
+	});
+
+	test('password and success pages HTML-escape untrusted values', async () => {
+		const evil = `<img src=x onerror="alert('x')">`;
+		const badLogin = await worker.fetch(authRequest('/code', evil), PASSWORDS);
+		const loginHtml = await badLogin.text();
+		expect(loginHtml).toContain('Invalid password');
+		expect(loginHtml).not.toContain('<img src=x');
+
+		const env = {
+			...PASSWORDS,
+			CDN_BUCKET: {
+				get: async () => null,
+				put: async () => undefined,
+			},
+		};
+		const cookie = await authenticatedCookie('/upload', PASSWORDS.UPLOAD_PASSWORD);
+		const formData = new FormData();
+		formData.set('file', new File(['image'], `logo${evil}.png`, { type: 'image/png' }));
+
+		const uploadResponse = await worker.fetch(
+			new Request('https://files.point.com/upload', {
+				method: 'POST',
+				headers: { Cookie: cookie },
+				body: formData,
+			}),
+			env
+		);
+		const successHtml = await uploadResponse.text();
+		expect(uploadResponse.status).toBe(200);
+		expect(successHtml).toContain('Upload Successful');
+		expect(successHtml).not.toContain('<img src=x');
+		expect(successHtml).toContain('&lt;img');
 	});
 
 	test('an authenticated upload does not require the password again', async () => {
