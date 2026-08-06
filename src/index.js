@@ -39,6 +39,120 @@ const ALLOWED_ORIGINS = [
 	'https://canvas.webflow.com',
 ];
 
+const AUTH_SESSION_SECONDS = 24 * 60 * 60;
+const AUTH_COOKIE_NAMES = {
+	browse: 'cdn_browse_auth',
+	code: 'cdn_code_auth',
+};
+const textEncoder = new TextEncoder();
+
+async function importHmacKey(secret, usages) {
+	return crypto.subtle.importKey('raw', textEncoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, usages);
+}
+
+export async function verifyPassword(candidate, expected) {
+	if (typeof candidate !== 'string' || typeof expected !== 'string' || expected.length === 0) {
+		return false;
+	}
+
+	const challenge = textEncoder.encode('marketing-cdn-password-verification');
+	const expectedKey = await importHmacKey(expected, ['sign']);
+	const candidateKey = await importHmacKey(candidate, ['verify']);
+	const signature = await crypto.subtle.sign('HMAC', expectedKey, challenge);
+	return crypto.subtle.verify('HMAC', candidateKey, signature, challenge);
+}
+
+function bytesToBase64Url(bytes) {
+	let binary = '';
+	for (const byte of bytes) {
+		binary += String.fromCharCode(byte);
+	}
+	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlToBytes(value) {
+	try {
+		const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+		const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+		return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+	} catch {
+		return null;
+	}
+}
+
+async function createAuthToken(scope, secret, now = Date.now()) {
+	const expiresAt = Math.floor(now / 1000) + AUTH_SESSION_SECONDS;
+	const payload = `${scope}:${expiresAt}`;
+	const key = await importHmacKey(secret, ['sign']);
+	const signature = await crypto.subtle.sign('HMAC', key, textEncoder.encode(payload));
+	return `${expiresAt}.${bytesToBase64Url(new Uint8Array(signature))}`;
+}
+
+export async function verifyAuthToken(token, scope, secret, now = Date.now()) {
+	if (typeof token !== 'string' || typeof secret !== 'string' || secret.length === 0) {
+		return false;
+	}
+
+	const separatorIndex = token.indexOf('.');
+	if (separatorIndex <= 0) {
+		return false;
+	}
+
+	const expiresAtString = token.slice(0, separatorIndex);
+	const expiresAt = Number(expiresAtString);
+	const signature = base64UrlToBytes(token.slice(separatorIndex + 1));
+	if (!Number.isInteger(expiresAt) || expiresAt <= Math.floor(now / 1000) || !signature) {
+		return false;
+	}
+
+	const key = await importHmacKey(secret, ['verify']);
+	return crypto.subtle.verify('HMAC', key, signature, textEncoder.encode(`${scope}:${expiresAtString}`));
+}
+
+function getCookie(request, name) {
+	const cookieHeader = request.headers.get('Cookie');
+	if (!cookieHeader) {
+		return null;
+	}
+
+	for (const cookie of cookieHeader.split(';')) {
+		const [cookieName, ...valueParts] = cookie.trim().split('=');
+		if (cookieName === name) {
+			return valueParts.join('=');
+		}
+	}
+	return null;
+}
+
+async function isAuthenticated(request, scope, secret) {
+	return verifyAuthToken(getCookie(request, AUTH_COOKIE_NAMES[scope]), scope, secret);
+}
+
+async function getAuthCookie(scope, secret) {
+	const token = await createAuthToken(scope, secret);
+	return `${AUTH_COOKIE_NAMES[scope]}=${token}; Path=/; Max-Age=${AUTH_SESSION_SECONDS}; HttpOnly; Secure; SameSite=Strict`;
+}
+
+function secureHtmlHeaders(additionalHeaders = {}) {
+	return {
+		'Content-Type': 'text/html',
+		'Cache-Control': 'no-store',
+		'Referrer-Policy': 'no-referrer',
+		'X-Content-Type-Options': 'nosniff',
+		...additionalHeaders,
+	};
+}
+
+function unauthorizedJsonResponse() {
+	return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+		status: 401,
+		headers: {
+			'Content-Type': 'application/json',
+			'Cache-Control': 'no-store',
+		},
+	});
+}
+
 // Check if origin is a valid Webflow branch containing "new-point"
 function isValidWebflowBranch(origin) {
 	if (!origin || typeof origin !== 'string') return false;
@@ -449,7 +563,7 @@ const UPLOAD_FORM_HTML = `
         <form method="POST" enctype="multipart/form-data">
             <div class="form-group">
                 <label for="password">Password:</label>
-                <input type="password" id="password" name="password" required placeholder="Enter upload password">
+                <input type="password" id="password" name="password" required placeholder="Enter upload password" autocomplete="current-password">
             </div>
             <div class="form-group">
                 <label for="file">Choose File:</label>
@@ -878,15 +992,15 @@ function getBrowseFilesHTML(origin) {
 `;
 }
 
-// HTML for the browse password form
-function getBrowsePasswordHTML(errorMessage = '') {
+// HTML for password-protected browser routes
+function getBrowserPasswordHTML(browserName, errorMessage = '') {
 	return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🔐 PDC Custom Code Browser</title>
+    <title>🔐 ${browserName} - Point CDN</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -959,7 +1073,7 @@ function getBrowsePasswordHTML(errorMessage = '') {
 </head>
 <body>
     <div class="container">
-        <h1>🔐 PDC Custom Code Browser</h1>
+        <h1>🔐 ${browserName}</h1>
         ${errorMessage ? `<div class="error">${errorMessage}</div>` : ''}
         <div class="info">
             Enter the password to access the file browser and search CDN files.
@@ -967,7 +1081,7 @@ function getBrowsePasswordHTML(errorMessage = '') {
         <form method="POST">
             <div class="form-group">
                 <label for="password">Password:</label>
-                <input type="password" id="password" name="password" required placeholder="Enter access password" autofocus>
+                <input type="password" id="password" name="password" required placeholder="Enter access password" autocomplete="current-password" autofocus>
             </div>
             <button type="submit">Access File Browser</button>
         </form>
@@ -978,7 +1092,7 @@ function getBrowsePasswordHTML(errorMessage = '') {
 }
 
 // HTML for the file browser interface
-function getBrowseHTML(origin, password) {
+function getBrowseHTML(origin) {
 	return `
 <!DOCTYPE html>
 <html lang="en">
@@ -1503,7 +1617,6 @@ function getBrowseHTML(origin, password) {
         const searchInput = document.getElementById('search-input');
         const fileList = document.getElementById('file-list');
         const stats = document.getElementById('stats');
-        const password = '${password}';
         let currentEnv = 'all';
         let currentFolder = 'all';
         let contextMenuFilePath = null;
@@ -1553,7 +1666,7 @@ function getBrowseHTML(origin, password) {
             try {
                 fileList.innerHTML = '<div class="loading">Loading files...</div>';
 
-                const response = await fetch(\`/api/files?password=\${encodeURIComponent(password)}&search=\${encodeURIComponent(search)}&env=\${encodeURIComponent(env)}&folder=\${encodeURIComponent(folder)}\`);
+                const response = await fetch(\`/api/files?search=\${encodeURIComponent(search)}&env=\${encodeURIComponent(env)}&folder=\${encodeURIComponent(folder)}\`);
                 const data = await response.json();
 
                 if (data.error) {
@@ -1696,7 +1809,7 @@ function getBrowseHTML(origin, password) {
 				element.disabled = true;
 
 				// Fetch HTML content
-				const response = await fetch(\`/api/file-content?password=\${encodeURIComponent(password)}&file=\${encodeURIComponent(filename)}\`);
+				const response = await fetch(\`/api/file-content?file=\${encodeURIComponent(filename)}\`);
 				const data = await response.json();
 
 				if (data.error) {
@@ -1775,7 +1888,7 @@ function getBrowseHTML(origin, password) {
             
             try {
                 // Fetch stats
-                const response = await fetch(\`/api/file-stats?password=\${encodeURIComponent(password)}&file=\${encodeURIComponent(filepath)}\`);
+                const response = await fetch(\`/api/file-stats?file=\${encodeURIComponent(filepath)}\`);
                 const stats = await response.json();
                 
                 if (stats.error) {
@@ -1875,7 +1988,7 @@ function getBrowseHTML(origin, password) {
                 document.body.appendChild(loadingMsg);
 
                 // Call delete API
-                const response = await fetch(\`/api/delete-file?password=\${encodeURIComponent(password)}&file=\${encodeURIComponent(filepath)}\`, {
+                const response = await fetch(\`/api/delete-file?file=\${encodeURIComponent(filepath)}\`, {
                     method: 'DELETE',
                 });
 
@@ -1956,69 +2069,105 @@ export default {
 			const url = new URL(request.url);
 			const path = url.pathname.slice(1); // Remove leading slash
 
-			// Handle browse route - simple public file listing (no auth)
+			// Handle browse route - password-protected file listing
 			if (url.pathname === '/browse') {
 				if (request.method === 'GET') {
-					return new Response(getBrowseFilesHTML(url.origin), {
-						headers: { 'Content-Type': 'text/html' },
-					});
-				}
-				return new Response('Method Not Allowed', { status: 405 });
-			}
-
-			// Handle code browser route (previously /browse) - password protected
-			if (url.pathname === '/code') {
-				if (request.method === 'GET') {
-					// Check for password in query params
-					const password = url.searchParams.get('password');
-
-					// Validate password
-					if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
-						// Serve password form
-						return new Response(getBrowsePasswordHTML(), {
-							headers: { 'Content-Type': 'text/html' },
+					if (!env.UPLOAD_PASSWORD || !(await isAuthenticated(request, 'browse', env.UPLOAD_PASSWORD))) {
+						return new Response(getBrowserPasswordHTML('Files Browser'), {
+							headers: secureHtmlHeaders(),
 						});
 					}
 
-					// Password valid, serve the code browser
-					return new Response(getBrowseHTML(url.origin, password), {
-						headers: { 'Content-Type': 'text/html' },
+					return new Response(getBrowseFilesHTML(url.origin), {
+						headers: secureHtmlHeaders(),
 					});
 				}
 
 				if (request.method === 'POST') {
 					try {
-						// Parse form data
 						const formData = await request.formData();
 						const password = formData.get('password');
-
-						// Validate password
-						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
-							return new Response(getBrowsePasswordHTML('Invalid password. Please try again.'), {
+						if (!(await verifyPassword(password, env.UPLOAD_PASSWORD))) {
+							return new Response(getBrowserPasswordHTML('Files Browser', 'Invalid password. Please try again.'), {
 								status: 401,
-								headers: { 'Content-Type': 'text/html' },
+								headers: secureHtmlHeaders(),
 							});
 						}
 
-						// Password valid, redirect to code browser with password
-						return Response.redirect(`${url.origin}/code?password=${encodeURIComponent(password)}`, 302);
+						return new Response(null, {
+							status: 303,
+							headers: {
+								Location: '/browse',
+								'Set-Cookie': await getAuthCookie('browse', env.UPLOAD_PASSWORD),
+								'Cache-Control': 'no-store',
+							},
+						});
 					} catch (error) {
-						console.error('Code browser auth error:', error);
-						return new Response(getBrowsePasswordHTML('An error occurred. Please try again.'), {
+						console.error('Browse auth error:', error);
+						return new Response(getBrowserPasswordHTML('Files Browser', 'An error occurred. Please try again.'), {
 							status: 500,
-							headers: { 'Content-Type': 'text/html' },
+							headers: secureHtmlHeaders(),
 						});
 					}
 				}
 
-				// Method not allowed
 				return new Response('Method Not Allowed', { status: 405 });
 			}
 
-			// Handle browse files API route - public, no auth required
+			// Handle code browser route
+			if (url.pathname === '/code') {
+				if (request.method === 'GET') {
+					if (!env.CODE_PASSWORD || !(await isAuthenticated(request, 'code', env.CODE_PASSWORD))) {
+						return new Response(getBrowserPasswordHTML('PDC Custom Code Browser'), {
+							headers: secureHtmlHeaders(),
+						});
+					}
+
+					return new Response(getBrowseHTML(url.origin), {
+						headers: secureHtmlHeaders(),
+					});
+				}
+
+				if (request.method === 'POST') {
+					try {
+						const formData = await request.formData();
+						const password = formData.get('password');
+
+						if (!(await verifyPassword(password, env.CODE_PASSWORD))) {
+							return new Response(getBrowserPasswordHTML('PDC Custom Code Browser', 'Invalid password. Please try again.'), {
+								status: 401,
+								headers: secureHtmlHeaders(),
+							});
+						}
+
+						return new Response(null, {
+							status: 303,
+							headers: {
+								Location: '/code',
+								'Set-Cookie': await getAuthCookie('code', env.CODE_PASSWORD),
+								'Cache-Control': 'no-store',
+							},
+						});
+					} catch (error) {
+						console.error('Code browser auth error:', error);
+						return new Response(getBrowserPasswordHTML('PDC Custom Code Browser', 'An error occurred. Please try again.'), {
+							status: 500,
+							headers: secureHtmlHeaders(),
+						});
+					}
+				}
+
+				return new Response('Method Not Allowed', { status: 405 });
+			}
+
+			// Handle browse files API route
 			if (url.pathname === '/api/browse-files') {
 				if (request.method === 'GET') {
 					try {
+						if (!env.UPLOAD_PASSWORD || !(await isAuthenticated(request, 'browse', env.UPLOAD_PASSWORD))) {
+							return unauthorizedJsonResponse();
+						}
+
 						const search = url.searchParams.get('search') || '';
 						const { files } = await getFilesListSimple(env.CDN_BUCKET, search);
 						const fileData = files.map(({ key, uploaded }) => ({
@@ -2046,13 +2195,8 @@ export default {
 			if (url.pathname === '/api/delete-file') {
 				if (request.method === 'DELETE') {
 					try {
-						// Validate password for API access
-						const password = url.searchParams.get('password');
-						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
-							return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-								status: 401,
-								headers: { 'Content-Type': 'application/json' },
-							});
+						if (!env.CODE_PASSWORD || !(await isAuthenticated(request, 'code', env.CODE_PASSWORD))) {
+							return unauthorizedJsonResponse();
 						}
 
 						const filename = url.searchParams.get('file');
@@ -2106,13 +2250,8 @@ export default {
 			if (url.pathname === '/api/files') {
 				if (request.method === 'GET') {
 					try {
-						// Validate password for API access - use same password as upload
-						const password = url.searchParams.get('password');
-						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
-							return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-								status: 401,
-								headers: { 'Content-Type': 'application/json' },
-							});
+						if (!env.CODE_PASSWORD || !(await isAuthenticated(request, 'code', env.CODE_PASSWORD))) {
+							return unauthorizedJsonResponse();
 						}
 
 					const search = url.searchParams.get('search') || '';
@@ -2147,13 +2286,8 @@ export default {
 			if (url.pathname === '/api/file-stats') {
 				if (request.method === 'GET') {
 					try {
-						// Validate password for API access
-						const password = url.searchParams.get('password');
-						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
-							return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-								status: 401,
-								headers: { 'Content-Type': 'application/json' },
-							});
+						if (!env.CODE_PASSWORD || !(await isAuthenticated(request, 'code', env.CODE_PASSWORD))) {
+							return unauthorizedJsonResponse();
 						}
 
 						const filepath = url.searchParams.get('file');
@@ -2190,13 +2324,8 @@ export default {
 			if (url.pathname === '/api/file-content') {
 				if (request.method === 'GET') {
 					try {
-						// Validate password for API access
-						const password = url.searchParams.get('password');
-						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
-							return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-								status: 401,
-								headers: { 'Content-Type': 'application/json' },
-							});
+						if (!env.CODE_PASSWORD || !(await isAuthenticated(request, 'code', env.CODE_PASSWORD))) {
+							return unauthorizedJsonResponse();
 						}
 
 						const filename = url.searchParams.get('file');
@@ -2252,7 +2381,7 @@ export default {
 				if (request.method === 'GET') {
 					// Serve the upload form
 					return new Response(UPLOAD_FORM_HTML, {
-						headers: { 'Content-Type': 'text/html' },
+						headers: secureHtmlHeaders(),
 					});
 				}
 
@@ -2263,8 +2392,7 @@ export default {
 						const password = formData.get('password');
 						const file = formData.get('file');
 
-						// Validate password
-						if (!env.UPLOAD_PASSWORD || password !== env.UPLOAD_PASSWORD) {
+						if (!(await verifyPassword(password, env.UPLOAD_PASSWORD))) {
 							return new Response(
 								`
 								<!DOCTYPE html>
@@ -2279,7 +2407,7 @@ export default {
 							`,
 								{
 									status: 401,
-									headers: { 'Content-Type': 'text/html' },
+									headers: secureHtmlHeaders(),
 								}
 							);
 						}
@@ -2320,7 +2448,9 @@ export default {
 
 						// Return success page
 						return new Response(getSuccessHTML(file.name, cdnUrl), {
-							headers: { 'Content-Type': 'text/html' },
+							headers: secureHtmlHeaders({
+								'Set-Cookie': await getAuthCookie('browse', env.UPLOAD_PASSWORD),
+							}),
 						});
 					} catch (error) {
 						console.error('Upload error:', error);

@@ -25,7 +25,8 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 ### 🔒 Security & Access Control
 
 - **CORS Protection**: Whitelist-based origin validation for cross-origin requests
-- **Password-Protected Uploads**: Secure file upload with configurable authentication
+- **Password-Protected Tools**: Upload and browse share one password; code management uses a separate credential
+- **Secure Browser Sessions**: Signed, short-lived `HttpOnly` cookies keep credentials out of URLs and client-side code
 - **Asset Path Validation**: Prevents unauthorized access patterns
 - **Origin-based Access Control**: Restricts access based on request origin
 
@@ -131,8 +132,9 @@ Required environment variables in your Cloudflare Worker:
 # R2 Bucket Configuration
 CDN_BUCKET=marketing-cdn
 
-# Upload Security
-UPLOAD_PASSWORD=your-secure-password
+# Tool Security (configure each value as a Wrangler secret)
+UPLOAD_PASSWORD=your-secure-password   # also unlocks /browse
+CODE_PASSWORD=another-secure-password
 
 # CORS Configuration (automatically configured)
 ALLOWED_ORIGINS=https://www.point.dev,https://point.com,https://files.point.com,https://scorecredit.com,https://scorecredit.webflow.io
@@ -183,6 +185,7 @@ wrangler login
 
 ```bash
 wrangler secret put UPLOAD_PASSWORD
+wrangler secret put CODE_PASSWORD
 ```
 
 4. **Start development server:**
@@ -238,7 +241,9 @@ wrangler dev
 
 ## Security Best Practices
 
-- **Password Protection**: Upload interface requires authentication
+- **Password Protection**: `/upload` and `/browse` share `UPLOAD_PASSWORD`; `/code` uses `CODE_PASSWORD`
+- **Public Asset URLs**: Direct file URLs (e.g. `https://files.point.com/logo.png`) remain publicly reachable; only management UIs and their APIs require auth
+- **Session Security**: Browser sessions expire after 24 hours and use signed `HttpOnly`, `Secure`, `SameSite=Strict` cookies; a successful upload also unlocks `/browse`
 - **Origin Restrictions**: CORS policy prevents unauthorized cross-origin access
 - **Input Validation**: File size and type validation on uploads
 - **Error Sanitization**: No sensitive information exposed in error messages
