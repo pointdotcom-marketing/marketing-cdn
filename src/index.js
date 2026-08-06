@@ -473,7 +473,7 @@ const UPLOAD_FORM_HTML = `
             font-weight: 500;
             color: #555;
         }
-        input[type="password"], input[type="file"] {
+        input[type="file"] {
             width: 100%;
             padding: 12px;
             border: 2px solid #ddd;
@@ -561,10 +561,6 @@ const UPLOAD_FORM_HTML = `
             </div>
         </div>
         <form method="POST" enctype="multipart/form-data">
-            <div class="form-group">
-                <label for="password">Password:</label>
-                <input type="password" id="password" name="password" required placeholder="Enter upload password" autocomplete="current-password">
-            </div>
             <div class="form-group">
                 <label for="file">Choose File:</label>
                 <input type="file" id="file" name="file" required>
@@ -992,8 +988,13 @@ function getBrowseFilesHTML(origin) {
 `;
 }
 
-// HTML for password-protected browser routes
-function getBrowserPasswordHTML(browserName, errorMessage = '') {
+// HTML for password-protected management routes
+function getBrowserPasswordHTML(
+	browserName,
+	errorMessage = '',
+	submitLabel = 'Access File Browser',
+	description = 'Enter the password to access the file browser and search CDN files.'
+) {
 	return `
 <!DOCTYPE html>
 <html lang="en">
@@ -1076,14 +1077,14 @@ function getBrowserPasswordHTML(browserName, errorMessage = '') {
         <h1>🔐 ${browserName}</h1>
         ${errorMessage ? `<div class="error">${errorMessage}</div>` : ''}
         <div class="info">
-            Enter the password to access the file browser and search CDN files.
+            ${description}
         </div>
         <form method="POST">
             <div class="form-group">
                 <label for="password">Password:</label>
                 <input type="password" id="password" name="password" required placeholder="Enter access password" autocomplete="current-password" autofocus>
             </div>
-            <button type="submit">Access File Browser</button>
+            <button type="submit">${submitLabel}</button>
         </form>
     </div>
 </body>
@@ -2379,7 +2380,18 @@ export default {
 			// Handle upload route
 			if (url.pathname === '/upload') {
 				if (request.method === 'GET') {
-					// Serve the upload form
+					if (!env.UPLOAD_PASSWORD || !(await isAuthenticated(request, 'browse', env.UPLOAD_PASSWORD))) {
+						return new Response(
+							getBrowserPasswordHTML(
+								'File Upload',
+								'',
+								'Access Upload Form',
+								'Enter the upload password to access the upload form and file browser.'
+							),
+							{ headers: secureHtmlHeaders() }
+						);
+					}
+
 					return new Response(UPLOAD_FORM_HTML, {
 						headers: secureHtmlHeaders(),
 					});
@@ -2387,30 +2399,53 @@ export default {
 
 				if (request.method === 'POST') {
 					try {
-						// Parse form data
-						const formData = await request.formData();
-						const password = formData.get('password');
-						const file = formData.get('file');
+						const authenticated = env.UPLOAD_PASSWORD && (await isAuthenticated(request, 'browse', env.UPLOAD_PASSWORD));
+						if (!authenticated) {
+							const contentType = request.headers.get('Content-Type') || '';
+							if (!contentType.startsWith('application/x-www-form-urlencoded')) {
+								return new Response(
+									getBrowserPasswordHTML(
+										'File Upload',
+										'Please log in before uploading a file.',
+										'Access Upload Form',
+										'Enter the upload password to access the upload form and file browser.'
+									),
+									{
+										status: 401,
+										headers: secureHtmlHeaders(),
+									}
+								);
+							}
 
-						if (!(await verifyPassword(password, env.UPLOAD_PASSWORD))) {
-							return new Response(
-								`
-								<!DOCTYPE html>
-								<html>
-								<head><title>Unauthorized</title><style>body{font-family:sans-serif;text-align:center;margin-top:50px;}</style></head>
-								<body>
-									<h1>🚫 Unauthorized</h1>
-									<p>Invalid password. Please try again.</p>
-									<a href="/upload">← Go Back</a>
-								</body>
-								</html>
-							`,
-								{
-									status: 401,
-									headers: secureHtmlHeaders(),
-								}
-							);
+							const loginFormData = await request.formData();
+							const password = loginFormData.get('password');
+							if (!(await verifyPassword(password, env.UPLOAD_PASSWORD))) {
+								return new Response(
+									getBrowserPasswordHTML(
+										'File Upload',
+										'Invalid password. Please try again.',
+										'Access Upload Form',
+										'Enter the upload password to access the upload form and file browser.'
+									),
+									{
+										status: 401,
+										headers: secureHtmlHeaders(),
+									}
+								);
+							}
+
+							return new Response(null, {
+								status: 303,
+								headers: {
+									Location: '/upload',
+									'Set-Cookie': await getAuthCookie('browse', env.UPLOAD_PASSWORD),
+									'Cache-Control': 'no-store',
+								},
+							});
 						}
+
+						const formData = await request.formData();
+						const file = formData.get('file');
 
 						// Validate file
 						if (!file || file.size === 0) {

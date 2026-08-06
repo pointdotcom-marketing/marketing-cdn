@@ -92,8 +92,8 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 #### Web Interface (Recommended)
 
 1. Navigate to `https://files.point.com/upload`
-2. Enter the upload password
-3. Select your file
+2. Enter the upload password to unlock the form
+3. Select your file (the password is not requested again while the session is valid)
 4. Click "Upload File"
 5. Copy the generated CDN URL
 
@@ -243,7 +243,7 @@ wrangler dev
 
 - **Password Protection**: `/upload` and `/browse` share `UPLOAD_PASSWORD`; `/code` uses `CODE_PASSWORD`
 - **Public Asset URLs**: Direct file URLs (e.g. `https://files.point.com/logo.png`) remain publicly reachable; only management UIs and their APIs require auth
-- **Session Security**: Browser sessions expire after 24 hours and use signed `HttpOnly`, `Secure`, `SameSite=Strict` cookies; a successful upload also unlocks `/browse`
+- **Session Security**: Browser sessions expire after 24 hours and use signed `HttpOnly`, `Secure`, `SameSite=Strict` cookies; logging in through `/upload` or `/browse` unlocks both forms
 - **Origin Restrictions**: CORS policy prevents unauthorized cross-origin access
 - **Input Validation**: File size and type validation on uploads
 - **Error Sanitization**: No sensitive information exposed in error messages

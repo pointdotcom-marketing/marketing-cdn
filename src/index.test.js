@@ -103,10 +103,7 @@ describe('browser authentication', () => {
 		expect(codeResponse.status).toBe(401);
 	});
 
-	test('a successful upload also authenticates the browse page', async () => {
-		const formData = new FormData();
-		formData.set('password', PASSWORDS.UPLOAD_PASSWORD);
-		formData.set('file', new File(['image'], 'logo.png', { type: 'image/png' }));
+	test('upload login unlocks the password-free upload form and browse page', async () => {
 		const env = {
 			...PASSWORDS,
 			CDN_BUCKET: {
@@ -116,17 +113,27 @@ describe('browser authentication', () => {
 			},
 		};
 
-		const uploadResponse = await worker.fetch(
+		const unauthenticatedUploadPage = await worker.fetch(new Request('https://files.point.com/upload'), env);
+		const loginPage = await unauthenticatedUploadPage.text();
+		expect(loginPage).toContain('name="password"');
+		expect(loginPage).not.toContain('name="file"');
+
+		const loginResponse = await worker.fetch(authRequest('/upload', PASSWORDS.UPLOAD_PASSWORD), env);
+		const cookie = loginResponse.headers.get('Set-Cookie');
+		expect(loginResponse.status).toBe(303);
+		expect(loginResponse.headers.get('Location')).toBe('/upload');
+		expect(cookie).toContain('cdn_browse_auth=');
+		expect(cookie).toContain('Max-Age=86400');
+
+		const authenticatedUploadPage = await worker.fetch(
 			new Request('https://files.point.com/upload', {
-				method: 'POST',
-				body: formData,
+				headers: { Cookie: cookie.split(';')[0] },
 			}),
 			env
 		);
-		const cookie = uploadResponse.headers.get('Set-Cookie');
-		expect(uploadResponse.status).toBe(200);
-		expect(cookie).toContain('cdn_browse_auth=');
-		expect(cookie).toContain('Max-Age=86400');
+		const uploadPage = await authenticatedUploadPage.text();
+		expect(uploadPage).toContain('name="file"');
+		expect(uploadPage).not.toContain('name="password"');
 
 		const browseResponse = await worker.fetch(
 			new Request('https://files.point.com/browse', {
@@ -136,5 +143,30 @@ describe('browser authentication', () => {
 		);
 		expect(browseResponse.status).toBe(200);
 		expect(await browseResponse.text()).toContain('Point CDN Files');
+	});
+
+	test('an authenticated upload does not require the password again', async () => {
+		const env = {
+			...PASSWORDS,
+			CDN_BUCKET: {
+				get: async () => null,
+				put: async () => undefined,
+			},
+		};
+		const loginResponse = await worker.fetch(authRequest('/upload', PASSWORDS.UPLOAD_PASSWORD), env);
+		const cookie = loginResponse.headers.get('Set-Cookie');
+		const formData = new FormData();
+		formData.set('file', new File(['image'], 'logo.png', { type: 'image/png' }));
+
+		const uploadResponse = await worker.fetch(
+			new Request('https://files.point.com/upload', {
+				method: 'POST',
+				headers: { Cookie: cookie.split(';')[0] },
+				body: formData,
+			}),
+			env
+		);
+		expect(uploadResponse.status).toBe(200);
+		expect(await uploadResponse.text()).toContain('Upload Successful');
 	});
 });
