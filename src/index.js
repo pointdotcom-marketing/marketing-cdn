@@ -274,71 +274,6 @@ function fuzzyMatchPart(filenamePart, queryPart) {
 	return Math.min(score, 1); // Cap at 1.0
 }
 
-// Track file request (non-blocking, fire and forget)
-async function trackFileRequest(bucket, filepath) {
-	try {
-		// Only track files in code/ directory
-		if (!filepath.startsWith('code/')) {
-			return;
-		}
-
-		const analyticsKey = `analytics/${filepath}.json`;
-		
-		// Try to get existing analytics data
-		let existingData = await bucket.get(analyticsKey);
-		let stats = { requestCount: 0, firstServed: null, lastServed: null };
-		
-		if (existingData) {
-			try {
-				stats = JSON.parse(await existingData.text());
-			} catch {
-				// If parsing fails, use defaults
-			}
-		}
-		
-		// Update stats
-		const now = new Date().toISOString();
-		stats.requestCount = (stats.requestCount || 0) + 1;
-		stats.lastServed = now;
-		if (!stats.firstServed) {
-			stats.firstServed = now;
-		}
-		
-		// Save updated stats (non-blocking - don't await)
-		bucket.put(analyticsKey, JSON.stringify(stats), {
-			httpMetadata: { contentType: 'application/json' },
-		}).catch(err => {
-			// Silently fail - analytics should not break file serving
-			console.error('Failed to save analytics:', err);
-		});
-	} catch (error) {
-		// Silently fail - analytics should not break file serving
-		console.error('Error tracking file request:', error);
-	}
-}
-
-// Get file statistics
-async function getFileStats(bucket, filepath) {
-	try {
-		// Only track files in code/ directory
-		if (!filepath.startsWith('code/')) {
-			return { requestCount: 0, firstServed: null, lastServed: null };
-		}
-
-		const analyticsKey = `analytics/${filepath}.json`;
-		const analyticsData = await bucket.get(analyticsKey);
-		
-		if (!analyticsData) {
-			return { requestCount: 0, firstServed: null, lastServed: null };
-		}
-		
-		return JSON.parse(await analyticsData.text());
-	} catch (error) {
-		console.error('Error getting file stats:', error);
-		return { requestCount: 0, firstServed: null, lastServed: null };
-	}
-}
-
 // Get list of files from R2 bucket with optional search, environment, and folder filters
 async function getFilesList(bucket, search = '', env = 'all', folder = 'all') {
 	try {
@@ -417,7 +352,9 @@ async function getFilesListSimple(bucket, search = '') {
 		const objects = await bucket.list();
 		let files = objects.objects.map((obj) => ({ key: obj.key, uploaded: obj.uploaded }));
 
-		// Exclude files in the code/ directory and internal analytics files
+		// The analytics/ prefix is no longer written to, but leftover objects from the
+		// removed per-file stats feature may still be in the bucket. Keep hiding them
+		// until the prefix is purged from R2.
 		files = files.filter((file) => !file.key.startsWith('code/') && !file.key.startsWith('analytics/'));
 
 		// Filter by search term if provided (fuzzy search)
@@ -1477,88 +1414,6 @@ function getBrowseHTML(origin) {
         .file-name {
             cursor: context-menu;
         }
-        .stats-modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 2000;
-        }
-        .stats-modal-content {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-            max-width: 500px;
-            width: 90%;
-            max-height: 80vh;
-            overflow-y: auto;
-        }
-        .stats-modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 20px;
-            border-bottom: 1px solid #eee;
-        }
-        .stats-modal-header h2 {
-            margin: 0;
-            color: #333;
-            font-size: 20px;
-        }
-        .stats-modal-close {
-            background: none;
-            border: none;
-            font-size: 28px;
-            cursor: pointer;
-            color: #666;
-            padding: 0;
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 4px;
-            transition: all 0.2s;
-        }
-        .stats-modal-close:hover {
-            background: #f0f0f0;
-            color: #333;
-        }
-        .stats-modal-body {
-            padding: 20px;
-        }
-        .stat-item {
-            margin-bottom: 16px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid #eee;
-        }
-        .stat-item:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
-        }
-        .stat-label {
-            font-size: 13px;
-            color: #666;
-            font-weight: 500;
-            margin-bottom: 4px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .stat-value {
-            font-size: 18px;
-            color: #333;
-            font-weight: 600;
-        }
-        .stat-value.large {
-            font-size: 32px;
-            color: #007bff;
-        }
     </style>
 </head>
 <body>
@@ -1597,20 +1452,7 @@ function getBrowseHTML(origin) {
     </div>
 
     <div id="context-menu" class="context-menu">
-        <div class="context-menu-item" onclick="contextMenuStats()">📊 View Stats</div>
         <div class="context-menu-item danger" onclick="contextMenuDelete()">🗑️ Delete File</div>
-    </div>
-
-    <div id="stats-modal" class="stats-modal" style="display: none;">
-        <div class="stats-modal-content">
-            <div class="stats-modal-header">
-                <h2>📊 File Statistics</h2>
-                <button class="stats-modal-close" onclick="closeStatsModal()">&times;</button>
-            </div>
-            <div class="stats-modal-body" id="stats-modal-body">
-                <div class="loading">Loading stats...</div>
-            </div>
-        </div>
     </div>
 
     <script>
@@ -1874,78 +1716,6 @@ function getBrowseHTML(origin) {
 
         let deleteConfirmInProgress = false;
         let deleteConfirmTimeout = null;
-
-        async function contextMenuStats() {
-            if (!contextMenuFilePath) return;
-            
-            const filepath = contextMenuFilePath;
-            contextMenu.classList.remove('show');
-            
-            // Show modal
-            const modal = document.getElementById('stats-modal');
-            const modalBody = document.getElementById('stats-modal-body');
-            modal.style.display = 'flex';
-            modalBody.innerHTML = '<div class="loading">Loading stats...</div>';
-            
-            try {
-                // Fetch stats
-                const response = await fetch(\`/api/file-stats?file=\${encodeURIComponent(filepath)}\`);
-                const stats = await response.json();
-                
-                if (stats.error) {
-                    throw new Error(stats.error);
-                }
-                
-                // Format dates
-                const formatDate = (dateStr) => {
-                    if (!dateStr) return 'Never';
-                    const date = new Date(dateStr);
-                    return date.toLocaleString('en-US', {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    });
-                };
-                
-                // Display stats
-                modalBody.innerHTML = \`
-                    <div class="stat-item">
-                        <div class="stat-label">Total Requests</div>
-                        <div class="stat-value large">\${stats.requestCount || 0}</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">First Served</div>
-                        <div class="stat-value">\${formatDate(stats.firstServed)}</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">Last Served</div>
-                        <div class="stat-value">\${formatDate(stats.lastServed)}</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">File Path</div>
-                        <div class="stat-value" style="font-size: 12px; font-family: monospace; word-break: break-all; color: #666;">\${filepath}</div>
-                    </div>
-                \`;
-            } catch (error) {
-                console.error('Failed to load stats:', error);
-                modalBody.innerHTML = '<div class="no-files">Error loading statistics</div>';
-            }
-        }
-
-        function closeStatsModal() {
-            const modal = document.getElementById('stats-modal');
-            modal.style.display = 'none';
-            contextMenuFilePath = null;
-        }
-
-        // Close modal when clicking outside
-        document.getElementById('stats-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'stats-modal') {
-                closeStatsModal();
-            }
-        });
 
         async function contextMenuDelete() {
             if (!contextMenuFilePath) return;
@@ -2273,44 +2043,6 @@ export default {
 					} catch (error) {
 						console.error('Files API error:', error);
 						return new Response(JSON.stringify({ error: 'Failed to fetch files' }), {
-							status: 500,
-							headers: { 'Content-Type': 'application/json' },
-						});
-					}
-				}
-
-				// Method not allowed
-				return new Response('Method Not Allowed', { status: 405 });
-			}
-
-			// Handle file stats API route
-			if (url.pathname === '/api/file-stats') {
-				if (request.method === 'GET') {
-					try {
-						if (!env.CODE_PASSWORD || !(await isAuthenticated(request, 'code', env.CODE_PASSWORD))) {
-							return unauthorizedJsonResponse();
-						}
-
-						const filepath = url.searchParams.get('file');
-						if (!filepath) {
-							return new Response(JSON.stringify({ error: 'File parameter required' }), {
-								status: 400,
-								headers: { 'Content-Type': 'application/json' },
-							});
-						}
-
-						// Get file stats
-						const stats = await getFileStats(env.CDN_BUCKET, filepath);
-
-						return new Response(JSON.stringify(stats), {
-							headers: {
-								'Content-Type': 'application/json',
-								'Cache-Control': 'no-cache',
-							},
-						});
-					} catch (error) {
-						console.error('File stats API error:', error);
-						return new Response(JSON.stringify({ error: 'Failed to fetch file stats' }), {
 							status: 500,
 							headers: { 'Content-Type': 'application/json' },
 						});
@@ -2654,11 +2386,6 @@ export default {
 						headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
 						headers.set('Content-Length', String(length));
 
-						// Track file request (non-blocking)
-						trackFileRequest(env.CDN_BUCKET, path).catch(err => {
-							console.error('Error tracking file request:', err);
-						});
-
 						return new Response(ranged.body, {
 							status: 206,
 							headers,
@@ -2667,23 +2394,13 @@ export default {
 						console.error('Range request error:', error);
 						// Fall back to sending the full file
 						headers.set('Content-Range', `bytes */${object.size}`);
-						
-						// Track file request for fallback (non-blocking)
-						trackFileRequest(env.CDN_BUCKET, path).catch(err => {
-							console.error('Error tracking file request:', err);
-						});
-						
+
 						return new Response(object.body, {
 							headers,
 						});
 					}
 				}
 			}
-
-			// Track file request (non-blocking)
-			trackFileRequest(env.CDN_BUCKET, path).catch(err => {
-				console.error('Error tracking file request:', err);
-			});
 
 			return new Response(responseBody, {
 				headers,

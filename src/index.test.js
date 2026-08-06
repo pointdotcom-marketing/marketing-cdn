@@ -21,6 +21,30 @@ describe('CDN cache policy', () => {
 	});
 });
 
+describe('per-file request stats', () => {
+	test('serving a code asset no longer writes analytics objects to the bucket', async () => {
+		const writes = [];
+		const env = {
+			...PASSWORDS,
+			CDN_BUCKET: {
+				get: async () => ({ body: 'file-body', httpEtag: '"etag"', uploaded: new Date(), size: 9 }),
+				put: async (key) => writes.push(key),
+			},
+		};
+
+		const response = await worker.fetch(new Request('https://files.point.com/code/prod/js/app.js'), env);
+		expect(response.status).toBe(200);
+		expect(writes).toEqual([]);
+	});
+
+	test('the stats endpoint is no longer routed', async () => {
+		const env = { ...PASSWORDS, CDN_BUCKET: { get: async () => null } };
+		const response = await worker.fetch(new Request('https://files.point.com/api/file-stats?file=code/prod/a.js'), env);
+		// Falls through to asset serving, where a missing object redirects to point.com.
+		expect(response.status).toBe(302);
+	});
+});
+
 describe('isPublicFontAsset', () => {
 	test('opens only staging and production font directories', () => {
 		expect(isPublicFontAsset('code/staging/fonts/circular-std.css')).toBe(true);
@@ -143,6 +167,27 @@ describe('browser authentication', () => {
 		);
 		expect(browseResponse.status).toBe(200);
 		expect(await browseResponse.text()).toContain('Point CDN Files');
+	});
+
+	test('the code browser renders a parseable inline script with no stats UI', async () => {
+		const loginResponse = await worker.fetch(authRequest('/code', PASSWORDS.CODE_PASSWORD), PASSWORDS);
+		const cookie = loginResponse.headers.get('Set-Cookie').split(';')[0];
+		const pageResponse = await worker.fetch(
+			new Request('https://files.point.com/code', {
+				headers: { Cookie: cookie },
+			}),
+			PASSWORDS
+		);
+		const page = await pageResponse.text();
+
+		// The page is a template literal, so a malformed edit only surfaces when the
+		// inline script is parsed. new Function throws a SyntaxError if it is broken.
+		const script = page.slice(page.lastIndexOf('<script>') + '<script>'.length, page.lastIndexOf('</script>'));
+		expect(script.length).toBeGreaterThan(100);
+		expect(() => new Function(script)).not.toThrow();
+
+		expect(page).toContain('Delete File');
+		expect(page).not.toContain('View Stats');
 	});
 
 	test('an authenticated upload does not require the password again', async () => {
