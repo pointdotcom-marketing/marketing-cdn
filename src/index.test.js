@@ -3,7 +3,11 @@ import worker, {
 	BROWSER_CACHE_CONTROL,
 	CLOUDFLARE_CACHE_CONTROL,
 	escapeHtml,
+	fileExtensionsMatch,
 	isPublicFontAsset,
+	isReplaceableUploadKey,
+	purgeCloudflareFiles,
+	purgeUrlsForCdnKey,
 	verifyPassword,
 } from './index.js';
 import codeBrowserHtml from './ui/code-browser.html';
@@ -62,6 +66,9 @@ describe('admin UI templates', () => {
 	test('browse files escapes dynamic values and keeps data-url copy buttons', () => {
 		expect(browseFilesHtml).toContain('escapeHtml');
 		expect(browseFilesHtml).toContain('data-url=');
+		expect(browseFilesHtml).toContain('data-key=');
+		expect(browseFilesHtml).toContain('/api/replace-file');
+		expect(browseFilesHtml).toContain('Use Replace to keep the same link');
 		const script = browseFilesHtml.slice(
 			browseFilesHtml.lastIndexOf('<script>') + '<script>'.length,
 			browseFilesHtml.lastIndexOf('</script>')
@@ -191,6 +198,41 @@ describe('browser authentication', () => {
 		);
 		expect(authenticatedApi.status).toBe(200);
 		await expect(authenticatedApi.json()).resolves.toEqual({ files: [] });
+	});
+
+	test('browse listing hides code, careers, logo gallery, and generated PDF prefixes', async () => {
+		const env = {
+			...PASSWORDS,
+			CDN_BUCKET: {
+				list: async () => ({
+					objects: [
+						{ key: 'hero.png', uploaded: new Date('2026-08-01') },
+						{ key: 'code/prod/js/app.js', uploaded: new Date('2026-08-02') },
+						{ key: 'marketing-tools/tools/pdf-batch/logos/acme.png', uploaded: new Date('2026-08-03') },
+						{ key: 'marketing/tools/pdf-batch/broker-pdfs/acme.pdf', uploaded: new Date('2026-08-04') },
+						{ key: 'careers/job-board.js', uploaded: new Date('2026-08-05') },
+					],
+				}),
+			},
+		};
+		const cookie = await authenticatedCookie('/browse', PASSWORDS.UPLOAD_PASSWORD);
+		const response = await worker.fetch(
+			new Request('https://files.point.com/api/browse-files', {
+				headers: { Cookie: cookie },
+			}),
+			env
+		);
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toEqual({
+			files: [
+				{
+					key: 'hero.png',
+					url: 'https://files.point.com/hero.png',
+					lastModified: new Date('2026-08-01').toISOString(),
+					replaceable: true,
+				},
+			],
+		});
 	});
 
 	test('keeps code credentials out of redirects and generated pages', async () => {
@@ -338,5 +380,182 @@ describe('browser authentication', () => {
 		);
 		expect(uploadResponse.status).toBe(200);
 		expect(await uploadResponse.text()).toContain('Upload Successful');
+	});
+});
+
+describe('replaceable upload keys', () => {
+	test('allows public uploaded assets and rejects protected prefixes', () => {
+		expect(isReplaceableUploadKey('logo.png')).toBe(true);
+		expect(isReplaceableUploadKey('images/hero.jpg')).toBe(true);
+		expect(isReplaceableUploadKey('code/prod/js/app.js')).toBe(false);
+		expect(isReplaceableUploadKey('marketing-tools/tools/pdf-batch/logos/a.png')).toBe(false);
+		expect(isReplaceableUploadKey('marketing/tools/pdf-batch/broker-pdfs/acme.pdf')).toBe(false);
+		expect(isReplaceableUploadKey('careers/job-board.js')).toBe(false);
+		expect(isReplaceableUploadKey('../logo.png')).toBe(false);
+		expect(isReplaceableUploadKey('/logo.png')).toBe(false);
+		expect(fileExtensionsMatch('logo.png', 'new-logo.PNG')).toBe(true);
+		expect(fileExtensionsMatch('logo.png', 'logo.jpg')).toBe(false);
+	});
+});
+
+describe('cache purge helpers', () => {
+	test('purges the public URL and download variant', () => {
+		expect(purgeUrlsForCdnKey('https://files.point.com', 'folder/my file.png')).toEqual([
+			'https://files.point.com/folder/my%20file.png',
+			'https://files.point.com/folder/my%20file.png?download=true',
+		]);
+	});
+
+	test('skips purge when Cloudflare credentials are missing', async () => {
+		await expect(purgeCloudflareFiles({}, ['https://files.point.com/logo.png'])).resolves.toEqual({
+			ok: false,
+			skipped: true,
+		});
+	});
+
+	test('posts matching URLs to the Cloudflare purge API', async () => {
+		const calls = [];
+		const fetchImpl = async (url, init) => {
+			calls.push({ url, init });
+			return new Response(JSON.stringify({ success: true }), { status: 200 });
+		};
+
+		const result = await purgeCloudflareFiles(
+			{ CF_ZONE_ID: 'zone-1', CF_API_TOKEN: 'token-1' },
+			['https://files.point.com/logo.png'],
+			fetchImpl
+		);
+
+		expect(result).toEqual({ ok: true, skipped: false });
+		expect(calls).toHaveLength(1);
+		expect(calls[0].url).toBe('https://api.cloudflare.com/client/v4/zones/zone-1/purge_cache');
+		expect(calls[0].init.headers.Authorization).toBe('Bearer token-1');
+		expect(JSON.parse(calls[0].init.body)).toEqual({ files: ['https://files.point.com/logo.png'] });
+	});
+});
+
+describe('replace uploaded files', () => {
+	async function replaceRequest(env, { key, name, type = 'image/png', cookie }) {
+		const formData = new FormData();
+		formData.set('file', new File(['new-bytes'], name, { type }));
+		formData.set('key', key);
+		return worker.fetch(
+			new Request('https://files.point.com/api/replace-file', {
+				method: 'POST',
+				headers: cookie ? { Cookie: cookie } : undefined,
+				body: formData,
+			}),
+			env
+		);
+	}
+
+	test('overwrites an existing uploaded object and purges its CDN URL', async () => {
+		const puts = [];
+		const fetchCalls = [];
+		const env = {
+			...PASSWORDS,
+			CDN_PUBLIC_BASE: 'https://files.point.com',
+			CF_ZONE_ID: 'zone-1',
+			CF_API_TOKEN: 'token-1',
+			CDN_BUCKET: {
+				head: async (key) => (key === 'logo.png' ? { httpMetadata: { contentType: 'image/png' } } : null),
+				put: async (key, _body, options) => puts.push({ key, options }),
+			},
+		};
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = async (url, init) => {
+			fetchCalls.push({ url, init });
+			return new Response(JSON.stringify({ success: true }), { status: 200 });
+		};
+
+		try {
+			const cookie = await authenticatedCookie('/browse', PASSWORDS.UPLOAD_PASSWORD);
+			const response = await replaceRequest(env, { key: 'logo.png', name: 'logo.png', cookie });
+			expect(response.status).toBe(200);
+			await expect(response.json()).resolves.toEqual({
+				success: true,
+				key: 'logo.png',
+				url: 'https://files.point.com/logo.png',
+				cachePurged: true,
+				cacheSkipped: false,
+			});
+			expect(puts).toEqual([
+				{ key: 'logo.png', options: { httpMetadata: { contentType: 'image/png' } } },
+			]);
+			expect(fetchCalls[0].url).toContain('/zones/zone-1/purge_cache');
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test('rejects unauthenticated, missing, protected, and extension-mismatched replacements', async () => {
+		const env = {
+			...PASSWORDS,
+			CDN_BUCKET: {
+				head: async () => ({ httpMetadata: { contentType: 'image/png' } }),
+				put: async () => undefined,
+			},
+		};
+
+		const unauthenticated = await replaceRequest(env, { key: 'logo.png', name: 'logo.png' });
+		expect(unauthenticated.status).toBe(401);
+
+		const cookie = await authenticatedCookie('/browse', PASSWORDS.UPLOAD_PASSWORD);
+		const missing = await worker.fetch(
+			new Request('https://files.point.com/api/replace-file', {
+				method: 'POST',
+				headers: { Cookie: cookie },
+				body: (() => {
+					const formData = new FormData();
+					formData.set('key', 'logo.png');
+					return formData;
+				})(),
+			}),
+			env
+		);
+		expect(missing.status).toBe(400);
+
+		const protectedFile = await replaceRequest(env, {
+			key: 'code/prod/js/app.js',
+			name: 'app.js',
+			type: 'application/javascript',
+			cookie,
+		});
+		expect(protectedFile.status).toBe(403);
+
+		const mismatched = await replaceRequest(env, { key: 'logo.png', name: 'logo.jpg', type: 'image/jpeg', cookie });
+		expect(mismatched.status).toBe(400);
+
+		const absent = await replaceRequest(
+			{ ...env, CDN_BUCKET: { head: async () => null, put: async () => undefined } },
+			{ key: 'logo.png', name: 'logo.png', cookie }
+		);
+		expect(absent.status).toBe(404);
+	});
+
+	test('upload still suffixes instead of overwriting an existing name', async () => {
+		const puts = [];
+		const env = {
+			...PASSWORDS,
+			CDN_BUCKET: {
+				get: async (key) => (key === 'logo.png' ? { key } : null),
+				put: async (key) => puts.push(key),
+			},
+		};
+		const cookie = await authenticatedCookie('/upload', PASSWORDS.UPLOAD_PASSWORD);
+		const formData = new FormData();
+		formData.set('file', new File(['image'], 'logo.png', { type: 'image/png' }));
+
+		const response = await worker.fetch(
+			new Request('https://files.point.com/upload', {
+				method: 'POST',
+				headers: { Cookie: cookie },
+				body: formData,
+			}),
+			env
+		);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain('https://files.point.com/logo-1.png');
+		expect(puts).toEqual(['logo-1.png']);
 	});
 });

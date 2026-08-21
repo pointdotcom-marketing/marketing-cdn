@@ -18,7 +18,8 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 ### 📤 File Upload System
 
 - **Web-based Upload Interface**: Accessible at `/upload` with password protection
-- **Automatic File Deduplication**: Prevents overwrites by adding incremental suffixes (-1, -2, etc.)
+- **Automatic File Deduplication**: Uploads never overwrite; duplicate names get incremental suffixes (-1, -2, etc.)
+- **In-place Replace**: Browse pages can replace an uploaded file while keeping the same public URL
 - **Success Page with URL Copying**: User-friendly upload confirmation with shareable links
 - **Multiple Upload Methods**: Web interface, Cloudflare Dashboard, AWS S3 API, or Wrangler CLI
 
@@ -97,6 +98,8 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 4. Click "Upload File"
 5. Copy the generated CDN URL
 
+Uploads never overwrite an existing object. If `logo.png` is already on the CDN, the new file is stored as `logo-1.png`. To keep the same URL, open `/browse` and use **Replace** on that file.
+
 #### Alternative Methods
 
 - **Cloudflare Dashboard**: Direct R2 bucket management
@@ -131,14 +134,21 @@ Required environment variables in your Cloudflare Worker:
 ```bash
 # R2 Bucket Configuration
 CDN_BUCKET=marketing-cdn
+CDN_PUBLIC_BASE=https://files.point.com
 
 # Tool Security (configure each value as a Wrangler secret)
 UPLOAD_PASSWORD=your-secure-password   # also unlocks /browse
 CODE_PASSWORD=another-secure-password
 
+# Cache purge for in-place replace (same zone credentials as pdc-code deploys)
+CF_ZONE_ID=your-files-point-com-zone-id
+CF_API_TOKEN=your-cache-purge-token
+
 # CORS Configuration (automatically configured)
 ALLOWED_ORIGINS=https://www.point.dev,https://point.com,https://files.point.com,https://scorecredit.com,https://scorecredit.webflow.io
 ```
+
+`CF_ZONE_ID` can be a Wrangler var. `CF_API_TOKEN` must be a secret with **Zone.Cache Purge** permission for the `files.point.com` zone. Without both, Replace still writes the new object to R2, but Cloudflare may keep serving the previous edge copy until it expires.
 
 ### Wrangler Configuration (`wrangler.toml`)
 
@@ -151,6 +161,9 @@ compatibility_flags = ["nodejs_compat"]
 [[r2_buckets]]
 binding = "CDN_BUCKET"
 bucket_name = "marketing-cdn"
+
+[vars]
+CDN_PUBLIC_BASE = "https://files.point.com"
 
 [observability]
 enabled = true
@@ -186,6 +199,7 @@ wrangler login
 ```bash
 wrangler secret put UPLOAD_PASSWORD
 wrangler secret put CODE_PASSWORD
+wrangler secret put CF_API_TOKEN
 ```
 
 4. **Start development server:**

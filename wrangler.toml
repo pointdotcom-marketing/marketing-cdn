@@ -21,6 +21,10 @@ fallthrough = true
 binding = "CDN_BUCKET"
 bucket_name = "marketing-cdn"
 
+[vars]
+CDN_PUBLIC_BASE = "https://files.point.com"
+CF_ZONE_ID = "794e396a93d8d8a7ab4cebef200ff64f"
+
 [observability]
 enabled = true
 head_sampling_rate = 1 # optional. default = 1.
