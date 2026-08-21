@@ -157,11 +157,15 @@ name = "marketing-cdn"
 main = "src/index.js"
 compatibility_date = "2024-12-05"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = true
 
 [[routes]]
 pattern = "files.point.com"
 zone_name = "point.com"
 custom_domain = true
+enabled = true
+previews_enabled = false
 
 [[r2_buckets]]
 binding = "CDN_BUCKET"
