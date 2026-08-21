@@ -117,6 +117,25 @@
         }
         .copy-btn:hover { background: #0056b3; transform: translateY(-1px); }
         .copy-btn.copied { background: #28a745; }
+        .file-actions {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .replace-btn {
+            background: white;
+            color: #007bff;
+            border: 1px solid #007bff;
+            padding: 7px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .replace-btn:hover { background: #f0f6ff; }
+        .replace-btn:disabled { opacity: 0.45; cursor: not-allowed; }
         .no-files {
             text-align: center;
             padding: 48px 20px;
@@ -163,6 +182,7 @@
                 <input type="text" id="search-input" class="search-input" placeholder="Search files..." autocomplete="off">
             </div>
         </div>
+        <p style="font-size: 13px; color: #888; margin: -8px 0 16px;">Uploads never overwrite an existing URL. Use Replace to keep the same link.</p>
 
         <div id="stats" class="stats-bar">Loading...</div>
 
@@ -175,12 +195,16 @@
             <a href="/code">Code Browser</a>
         </div>
     </div>
+    <input type="file" id="replace-input" hidden>
 
     <script>
         const searchInput = document.getElementById('search-input');
         const fileList = document.getElementById('file-list');
         const statsEl = document.getElementById('stats');
+        const replaceInput = document.getElementById('replace-input');
+        const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
         let searchTimeout;
+        let pendingReplace = null;
 
         function escapeHtml(value) {
             return String(value)
@@ -219,6 +243,63 @@
             });
         }
 
+        function fileExtension(name) {
+            const lastDot = String(name || '').lastIndexOf('.');
+            if (lastDot <= 0) return '';
+            return name.slice(lastDot + 1).toLowerCase();
+        }
+
+        async function replaceFile(key, file) {
+            const body = new FormData();
+            body.append('file', file);
+            body.append('key', key);
+            const res = await fetch('/api/replace-file', { method: 'POST', body });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(data.error || 'Replace failed');
+            }
+            return data;
+        }
+
+        replaceInput.addEventListener('change', async () => {
+            const file = replaceInput.files && replaceInput.files[0];
+            const target = pendingReplace;
+            replaceInput.value = '';
+            pendingReplace = null;
+            if (!file || !target) return;
+
+            if (file.size > MAX_UPLOAD_BYTES) {
+                alert('File is larger than the 100 MB limit.');
+                return;
+            }
+            if (fileExtension(file.name) !== fileExtension(target.key)) {
+                const ext = fileExtension(target.key);
+                alert(ext
+                    ? 'Replacement must keep the .' + ext + ' extension so the URL still works.'
+                    : 'Replacement must also have no file extension so the URL still works.');
+                return;
+            }
+            if (!confirm('Replace ' + target.key + '? The public URL stays the same and the current file is overwritten.')) {
+                return;
+            }
+
+            statsEl.textContent = 'Replacing ' + target.key + '…';
+            try {
+                const result = await replaceFile(target.key, file);
+                await loadFiles(searchInput.value);
+                if (result.cacheSkipped) {
+                    statsEl.textContent = 'Replaced ' + target.key + ' (cache purge is not configured)';
+                } else if (!result.cachePurged) {
+                    statsEl.textContent = 'Replaced ' + target.key + ' (cache purge failed — it may take time to appear)';
+                } else {
+                    statsEl.textContent = 'Replaced ' + target.key;
+                }
+            } catch (err) {
+                alert(err instanceof Error ? err.message : 'Replace failed');
+                statsEl.textContent = 'Replace failed';
+            }
+        });
+
         async function loadFiles(search = '') {
             fileList.innerHTML = '<div class="loading">Loading...</div>';
             statsEl.textContent = '';
@@ -237,21 +318,33 @@
 
 				fileList.innerHTML = files.map(f => {
                     const encodedUrl = f.url;
-                    const name = decodeURIComponent(f.url.split('/').pop());
+                    const name = f.key || decodeURIComponent(f.url.split('/').pop());
                     const date = formatDate(f.lastModified);
+                    const replaceBtn = f.replaceable
+                        ? `<button class="replace-btn" data-key="${escapeHtml(name)}" type="button">Replace</button>`
+                        : '';
                     return `<div class="file-item">
                         <div class="file-info">
                             <div class="file-name">${escapeHtml(name)}</div>
                             <div class="file-url">${escapeHtml(encodedUrl)}</div>
                         </div>
                         <div class="file-date">${escapeHtml(date)}</div>
-                        <button class="copy-btn" data-url="${escapeHtml(encodedUrl)}">Copy URL</button>
+                        <div class="file-actions">
+                            ${replaceBtn}
+                            <button class="copy-btn" data-url="${escapeHtml(encodedUrl)}" type="button">Copy URL</button>
+                        </div>
                     </div>`;
                 }).join('');
 
                 // Attach copy handlers after rendering (avoids inline onclick issues with special chars)
                 fileList.querySelectorAll('.copy-btn[data-url]').forEach(btn => {
                     btn.addEventListener('click', () => copyToClipboard(btn.dataset.url, btn));
+                });
+                fileList.querySelectorAll('.replace-btn[data-key]').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        pendingReplace = { key: btn.dataset.key };
+                        replaceInput.click();
+                    });
                 });
             } catch (err) {
                 fileList.innerHTML = '<div class="no-files">Error loading files</div>';

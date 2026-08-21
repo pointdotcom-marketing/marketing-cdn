@@ -28,6 +28,9 @@ const CONTENT_TYPES = {
 // retain an edge copy until the deployment workflow purges the updated URL.
 export const BROWSER_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
 export const CLOUDFLARE_CACHE_CONTROL = 'public, max-age=31536000';
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+export const PROTECTED_PREFIXES = ['code/', 'analytics/', 'marketing-tools/', 'marketing/', 'careers/'];
+const DEFAULT_CDN_PUBLIC_BASE = 'https://files.point.com';
 
 // File types that should be previewed in browser
 const PREVIEW_TYPES = new Set(['pdf', 'html', 'htm', 'jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'mp4']);
@@ -207,6 +210,79 @@ async function getUniqueFilename(bucket, originalName) {
 	return filename;
 }
 
+export function fileExtension(name) {
+	const lastDot = name.lastIndexOf('.');
+	if (lastDot <= 0) {
+		return '';
+	}
+	return name.slice(lastDot + 1).toLowerCase();
+}
+
+export function fileExtensionsMatch(existingKey, uploadName) {
+	return fileExtension(existingKey) === fileExtension(uploadName);
+}
+
+export function isReplaceableUploadKey(key) {
+	if (typeof key !== 'string' || key.length === 0 || key.length > 1024) {
+		return false;
+	}
+	if (key.includes('\0') || key.includes('\\') || key.startsWith('/') || key.includes('//')) {
+		return false;
+	}
+	const parts = key.split('/');
+	if (parts.some((part) => part === '' || part === '.' || part === '..')) {
+		return false;
+	}
+	return !PROTECTED_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+export function publicCdnBase(env, requestUrl) {
+	const configured = typeof env?.CDN_PUBLIC_BASE === 'string' ? env.CDN_PUBLIC_BASE.trim() : '';
+	return (configured || new URL(requestUrl).origin || DEFAULT_CDN_PUBLIC_BASE).replace(/\/$/, '');
+}
+
+export function purgeUrlsForCdnKey(publicBase, key) {
+	const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+	const url = `${publicBase.replace(/\/$/, '')}/${encodedKey}`;
+	return [url, `${url}?download=true`];
+}
+
+export async function purgeCloudflareFiles(env, urls, fetchImpl = fetch) {
+	const zoneId = typeof env?.CF_ZONE_ID === 'string' ? env.CF_ZONE_ID.trim() : '';
+	const token = typeof env?.CF_API_TOKEN === 'string' ? env.CF_API_TOKEN.trim() : '';
+	if (!zoneId || !token) {
+		console.error('Cache purge skipped: CF_ZONE_ID or CF_API_TOKEN is not configured');
+		return { ok: false, skipped: true };
+	}
+
+	try {
+		const response = await fetchImpl(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${token}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({ files: urls }),
+		});
+		const body = await response.json().catch(() => null);
+		const ok = response.ok && body?.success === true;
+		if (!ok) {
+			console.error('Cache purge failed', { status: response.status, errors: body?.errors });
+		}
+		return { ok, skipped: false };
+	} catch (error) {
+		console.error('Cache purge failed', error);
+		return { ok: false, skipped: false };
+	}
+}
+
+function extensionMismatchMessage(key) {
+	const extension = fileExtension(key);
+	return extension
+		? `Replacement must keep the .${extension} extension so the URL still works`
+		: 'Replacement must also have no file extension so the URL still works';
+}
+
 // Simple fuzzy search scoring function
 function fuzzyScore(filename, query) {
 	if (!query) return 1; // Perfect score if no query
@@ -358,10 +434,8 @@ async function getFilesListSimple(bucket, search = '') {
 		const objects = await bucket.list();
 		let files = objects.objects.map((obj) => ({ key: obj.key, uploaded: obj.uploaded }));
 
-		// The analytics/ prefix is no longer written to, but leftover objects from the
-		// removed per-file stats feature may still be in the bucket. Keep hiding them
-		// until the prefix is purged from R2.
-		files = files.filter((file) => !file.key.startsWith('code/') && !file.key.startsWith('analytics/'));
+		// Hide code, leftover analytics, and tool namespaces (PDF/logo galleries, careers embeds).
+		files = files.filter((file) => !PROTECTED_PREFIXES.some((prefix) => file.key.startsWith(prefix)));
 
 		// Filter by search term if provided (fuzzy search)
 		if (search) {
@@ -542,8 +616,10 @@ export default {
 						const search = url.searchParams.get('search') || '';
 						const { files } = await getFilesListSimple(env.CDN_BUCKET, search);
 						const fileData = files.map(({ key, uploaded }) => ({
+							key,
 							url: encodeURI(`${url.origin}/${key}`),
 							lastModified: uploaded,
+							replaceable: isReplaceableUploadKey(key),
 						}));
 						return new Response(JSON.stringify({ files: fileData }), {
 							headers: {
@@ -559,6 +635,87 @@ export default {
 						});
 					}
 				}
+				return new Response('Method Not Allowed', { status: 405 });
+			}
+
+			// Handle replace file API route (uploaded assets only; keeps the existing CDN key)
+			if (url.pathname === '/api/replace-file') {
+				if (request.method === 'POST') {
+					try {
+						if (!env.UPLOAD_PASSWORD || !(await isAuthenticated(request, 'browse', env.UPLOAD_PASSWORD))) {
+							return unauthorizedJsonResponse();
+						}
+
+						const formData = await request.formData();
+						const file = formData.get('file');
+						const key = String(formData.get('key') ?? '').trim();
+
+						if (!file || typeof file === 'string' || file.size === 0) {
+							return new Response(JSON.stringify({ error: 'Please select a file to upload' }), {
+								status: 400,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+						if (file.size > MAX_UPLOAD_BYTES) {
+							return new Response(JSON.stringify({ error: 'File exceeds the 100 MB limit' }), {
+								status: 413,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+						if (!isReplaceableUploadKey(key)) {
+							return new Response(JSON.stringify({ error: 'That file cannot be replaced from this page' }), {
+								status: 403,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+						if (!fileExtensionsMatch(key, file.name)) {
+							return new Response(JSON.stringify({ error: extensionMismatchMessage(key) }), {
+								status: 400,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						const existing = await env.CDN_BUCKET.head(key);
+						if (!existing) {
+							return new Response(JSON.stringify({ error: 'File not found. Upload it as a new file instead.' }), {
+								status: 404,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+
+						await env.CDN_BUCKET.put(key, file.stream(), {
+							httpMetadata: {
+								contentType: file.type || existing.httpMetadata?.contentType || 'application/octet-stream',
+							},
+						});
+
+						const cdnUrl = `${publicCdnBase(env, request.url)}/${key.split('/').map(encodeURIComponent).join('/')}`;
+						const purge = await purgeCloudflareFiles(env, purgeUrlsForCdnKey(publicCdnBase(env, request.url), key));
+
+						return new Response(
+							JSON.stringify({
+								success: true,
+								key,
+								url: cdnUrl,
+								cachePurged: purge.ok,
+								cacheSkipped: purge.skipped,
+							}),
+							{
+								headers: {
+									'Content-Type': 'application/json',
+									'Cache-Control': 'no-store',
+								},
+							}
+						);
+					} catch (error) {
+						console.error('Replace file API error:', error);
+						return new Response(JSON.stringify({ error: 'Failed to replace file' }), {
+							status: 500,
+							headers: { 'Content-Type': 'application/json' },
+						});
+					}
+				}
+
 				return new Response('Method Not Allowed', { status: 405 });
 			}
 

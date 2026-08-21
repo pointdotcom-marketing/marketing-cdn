@@ -4,7 +4,8 @@
 - `npm run dev` - Start development server (wrangler dev)
 - `npm run deploy` - Deploy to Cloudflare Workers
 - `wrangler dev` - Alternative dev command
-- No lint/test commands configured - use TypeScript compiler for type checking
+- `npm test` - Run Vitest unit tests
+- POST `/api/replace-file` overwrites an existing uploaded object (not `code/`, `analytics/`, `marketing-tools/`, `marketing/`, or `careers/`) and purges Cloudflare cache for that URL
 
 ## Code Style & Formatting
 - **Indentation**: Tabs (configured in .editorconfig and .prettierrc)
