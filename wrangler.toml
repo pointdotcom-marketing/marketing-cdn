@@ -11,10 +11,10 @@ type = "Text"
 globs = ["**/*.html"]
 fallthrough = true
 
-# Custom domain configuration
-# routes = [
-#    { pattern = "files.point.com", custom_domain = true }
-#]
+[[routes]]
+pattern = "files.point.com"
+zone_name = "point.com"
+custom_domain = true
 
 # Bind an R2 Bucket for CDN storage
 [[r2_buckets]]

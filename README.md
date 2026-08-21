@@ -158,12 +158,18 @@ main = "src/index.js"
 compatibility_date = "2024-12-05"
 compatibility_flags = ["nodejs_compat"]
 
+[[routes]]
+pattern = "files.point.com"
+zone_name = "point.com"
+custom_domain = true
+
 [[r2_buckets]]
 binding = "CDN_BUCKET"
 bucket_name = "marketing-cdn"
 
 [vars]
 CDN_PUBLIC_BASE = "https://files.point.com"
+CF_ZONE_ID = "your-files-point-com-zone-id"
 
 [observability]
 enabled = true
