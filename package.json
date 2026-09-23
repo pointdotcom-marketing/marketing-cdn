@@ -9,10 +9,14 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
-		"test": "vitest run"
+		"test": "vitest run",
+		"typecheck": "wrangler types --check && tsc --noEmit",
+		"check": "npm run typecheck && npm run test",
+		"format:check": "prettier --check .",
+		"wrangler:types": "wrangler types"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^5.20260724.1",
+		"prettier": "^3.9.9",
 		"typescript": "^5.9.3",
 		"vitest": "^4.1.10",
 		"wrangler": "^4.114.0"
