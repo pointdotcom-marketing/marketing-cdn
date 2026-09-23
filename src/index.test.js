@@ -18,6 +18,27 @@ const PASSWORDS = {
 	UPLOAD_PASSWORD: 'upload-secret',
 };
 
+/**
+ * Tests pass partial mock bindings (e.g. an R2 stub with only `get`), so cast them to Env.
+ * @param {Request} request
+ * @param {object} env
+ */
+function fetchWorker(request, env) {
+	return worker.fetch(request, /** @type {Env} */ (env));
+}
+
+/**
+ * Returns the `name=value` part of a Set-Cookie header.
+ * @param {string | null} setCookie
+ */
+function cookieValue(setCookie) {
+	return /** @type {string} */ (/** @type {string} */ (setCookie).split(';')[0]);
+}
+
+/**
+ * @param {string} path
+ * @param {string} password
+ */
 function authRequest(path, password) {
 	return new Request(`https://files.point.com${path}`, {
 		method: 'POST',
@@ -26,9 +47,13 @@ function authRequest(path, password) {
 	});
 }
 
+/**
+ * @param {string} path
+ * @param {string} password
+ */
 async function authenticatedCookie(path, password) {
-	const loginResponse = await worker.fetch(authRequest(path, password), PASSWORDS);
-	return loginResponse.headers.get('Set-Cookie').split(';')[0];
+	const loginResponse = await fetchWorker(authRequest(path, password), PASSWORDS);
+	return cookieValue(loginResponse.headers.get('Set-Cookie'));
 }
 
 describe('CDN cache policy', () => {
@@ -79,16 +104,17 @@ describe('admin UI templates', () => {
 
 describe('asset serving', () => {
 	test('serves code assets with cache headers and does not write analytics', async () => {
+		/** @type {string[]} */
 		const writes = [];
 		const env = {
 			...PASSWORDS,
 			CDN_BUCKET: {
 				get: async () => ({ body: 'console.log(1)', httpEtag: '"etag"', uploaded: new Date('2024-01-01'), size: 14 }),
-				put: async (key) => writes.push(key),
+				put: async (/** @type {string} */ key) => writes.push(key),
 			},
 		};
 
-		const response = await worker.fetch(new Request('https://files.point.com/code/prod/js/app.js'), env);
+		const response = await fetchWorker(new Request('https://files.point.com/code/prod/js/app.js'), env);
 		expect(response.status).toBe(200);
 		expect(await response.text()).toBe('console.log(1)');
 		expect(response.headers.get('Content-Type')).toBe('application/javascript');
@@ -99,7 +125,7 @@ describe('asset serving', () => {
 
 	test('redirects missing assets to point.com', async () => {
 		const env = { ...PASSWORDS, CDN_BUCKET: { get: async () => null } };
-		const response = await worker.fetch(new Request('https://files.point.com/missing/file.js'), env);
+		const response = await fetchWorker(new Request('https://files.point.com/missing/file.js'), env);
 		expect(response.status).toBe(302);
 		expect(response.headers.get('Location')).toMatch(/^https:\/\/point\.com\/?$/);
 	});
@@ -111,7 +137,7 @@ describe('asset serving', () => {
 				get: async () => ({ body: 'x', httpEtag: '"e"', uploaded: new Date(), size: 1 }),
 			},
 		};
-		const response = await worker.fetch(
+		const response = await fetchWorker(
 			new Request('https://files.point.com/code/prod/js/app.js', {
 				headers: { Origin: 'https://evil.example' },
 			}),
@@ -127,7 +153,7 @@ describe('asset serving', () => {
 				get: async () => ({ body: 'font', httpEtag: '"e"', uploaded: new Date(), size: 4 }),
 			},
 		};
-		const response = await worker.fetch(
+		const response = await fetchWorker(
 			new Request('https://files.point.com/code/prod/fonts/CircularStd-Book.woff', {
 				headers: { Origin: 'https://evil.example' },
 			}),
@@ -139,7 +165,7 @@ describe('asset serving', () => {
 
 	test('the removed stats endpoint is no longer routed', async () => {
 		const env = { ...PASSWORDS, CDN_BUCKET: { get: async () => null } };
-		const response = await worker.fetch(new Request('https://files.point.com/api/file-stats?file=code/prod/a.js'), env);
+		const response = await fetchWorker(new Request('https://files.point.com/api/file-stats?file=code/prod/a.js'), env);
 		expect(response.status).toBe(302);
 	});
 });
@@ -172,14 +198,14 @@ describe('browser authentication', () => {
 			},
 		};
 
-		const unauthenticatedPage = await worker.fetch(new Request('https://files.point.com/browse'), env);
+		const unauthenticatedPage = await fetchWorker(new Request('https://files.point.com/browse'), env);
 		expect(await unauthenticatedPage.text()).toContain('Files Browser');
 		expect(unauthenticatedPage.headers.get('Cache-Control')).toBe('no-store');
 
-		const unauthenticatedApi = await worker.fetch(new Request('https://files.point.com/api/browse-files'), env);
+		const unauthenticatedApi = await fetchWorker(new Request('https://files.point.com/api/browse-files'), env);
 		expect(unauthenticatedApi.status).toBe(401);
 
-		const loginResponse = await worker.fetch(authRequest('/browse', PASSWORDS.UPLOAD_PASSWORD), env);
+		const loginResponse = await fetchWorker(authRequest('/browse', PASSWORDS.UPLOAD_PASSWORD), env);
 		const cookie = loginResponse.headers.get('Set-Cookie');
 		expect(loginResponse.status).toBe(303);
 		expect(loginResponse.headers.get('Location')).toBe('/browse');
@@ -190,9 +216,9 @@ describe('browser authentication', () => {
 		expect(cookie).toContain('Max-Age=86400');
 		expect(cookie).not.toContain(PASSWORDS.UPLOAD_PASSWORD);
 
-		const authenticatedApi = await worker.fetch(
+		const authenticatedApi = await fetchWorker(
 			new Request('https://files.point.com/api/browse-files', {
-				headers: { Cookie: cookie.split(';')[0] },
+				headers: { Cookie: cookieValue(cookie) },
 			}),
 			env
 		);
@@ -216,7 +242,7 @@ describe('browser authentication', () => {
 			},
 		};
 		const cookie = await authenticatedCookie('/browse', PASSWORDS.UPLOAD_PASSWORD);
-		const response = await worker.fetch(
+		const response = await fetchWorker(
 			new Request('https://files.point.com/api/browse-files', {
 				headers: { Cookie: cookie },
 			}),
@@ -236,15 +262,15 @@ describe('browser authentication', () => {
 	});
 
 	test('keeps code credentials out of redirects and generated pages', async () => {
-		const loginResponse = await worker.fetch(authRequest('/code', PASSWORDS.CODE_PASSWORD), PASSWORDS);
+		const loginResponse = await fetchWorker(authRequest('/code', PASSWORDS.CODE_PASSWORD), PASSWORDS);
 		const cookie = loginResponse.headers.get('Set-Cookie');
 		expect(loginResponse.status).toBe(303);
 		expect(loginResponse.headers.get('Location')).toBe('/code');
 		expect(cookie).not.toContain(PASSWORDS.CODE_PASSWORD);
 
-		const pageResponse = await worker.fetch(
+		const pageResponse = await fetchWorker(
 			new Request('https://files.point.com/code', {
-				headers: { Cookie: cookie.split(';')[0] },
+				headers: { Cookie: cookieValue(cookie) },
 			}),
 			PASSWORDS
 		);
@@ -255,8 +281,8 @@ describe('browser authentication', () => {
 	});
 
 	test('rejects incorrect browse and code passwords', async () => {
-		const browseResponse = await worker.fetch(authRequest('/browse', 'incorrect'), PASSWORDS);
-		const codeResponse = await worker.fetch(authRequest('/code', 'incorrect'), PASSWORDS);
+		const browseResponse = await fetchWorker(authRequest('/browse', 'incorrect'), PASSWORDS);
+		const codeResponse = await fetchWorker(authRequest('/code', 'incorrect'), PASSWORDS);
 		expect(browseResponse.status).toBe(401);
 		expect(codeResponse.status).toBe(401);
 	});
@@ -271,21 +297,21 @@ describe('browser authentication', () => {
 			},
 		};
 
-		const unauthenticatedUploadPage = await worker.fetch(new Request('https://files.point.com/upload'), env);
+		const unauthenticatedUploadPage = await fetchWorker(new Request('https://files.point.com/upload'), env);
 		const loginPage = await unauthenticatedUploadPage.text();
 		expect(loginPage).toContain('name="password"');
 		expect(loginPage).not.toContain('name="file"');
 
-		const loginResponse = await worker.fetch(authRequest('/upload', PASSWORDS.UPLOAD_PASSWORD), env);
+		const loginResponse = await fetchWorker(authRequest('/upload', PASSWORDS.UPLOAD_PASSWORD), env);
 		const cookie = loginResponse.headers.get('Set-Cookie');
 		expect(loginResponse.status).toBe(303);
 		expect(loginResponse.headers.get('Location')).toBe('/upload');
 		expect(cookie).toContain('cdn_browse_auth=');
 		expect(cookie).toContain('Max-Age=86400');
 
-		const authenticatedUploadPage = await worker.fetch(
+		const authenticatedUploadPage = await fetchWorker(
 			new Request('https://files.point.com/upload', {
-				headers: { Cookie: cookie.split(';')[0] },
+				headers: { Cookie: cookieValue(cookie) },
 			}),
 			env
 		);
@@ -293,9 +319,9 @@ describe('browser authentication', () => {
 		expect(uploadPage).toContain('name="file"');
 		expect(uploadPage).not.toContain('name="password"');
 
-		const browseResponse = await worker.fetch(
+		const browseResponse = await fetchWorker(
 			new Request('https://files.point.com/browse', {
-				headers: { Cookie: cookie.split(';')[0] },
+				headers: { Cookie: cookieValue(cookie) },
 			}),
 			env
 		);
@@ -305,7 +331,7 @@ describe('browser authentication', () => {
 
 	test('the code browser page is served from the HTML module with a parseable script', async () => {
 		const cookie = await authenticatedCookie('/code', PASSWORDS.CODE_PASSWORD);
-		const pageResponse = await worker.fetch(
+		const pageResponse = await fetchWorker(
 			new Request('https://files.point.com/code', {
 				headers: { Cookie: cookie },
 			}),
@@ -326,7 +352,7 @@ describe('browser authentication', () => {
 
 	test('password and success pages HTML-escape untrusted values', async () => {
 		const evil = `<img src=x onerror="alert('x')">`;
-		const badLogin = await worker.fetch(authRequest('/code', evil), PASSWORDS);
+		const badLogin = await fetchWorker(authRequest('/code', evil), PASSWORDS);
 		const loginHtml = await badLogin.text();
 		expect(loginHtml).toContain('Invalid password');
 		expect(loginHtml).not.toContain('<img src=x');
@@ -342,7 +368,7 @@ describe('browser authentication', () => {
 		const formData = new FormData();
 		formData.set('file', new File(['image'], `logo${evil}.png`, { type: 'image/png' }));
 
-		const uploadResponse = await worker.fetch(
+		const uploadResponse = await fetchWorker(
 			new Request('https://files.point.com/upload', {
 				method: 'POST',
 				headers: { Cookie: cookie },
@@ -365,15 +391,15 @@ describe('browser authentication', () => {
 				put: async () => undefined,
 			},
 		};
-		const loginResponse = await worker.fetch(authRequest('/upload', PASSWORDS.UPLOAD_PASSWORD), env);
+		const loginResponse = await fetchWorker(authRequest('/upload', PASSWORDS.UPLOAD_PASSWORD), env);
 		const cookie = loginResponse.headers.get('Set-Cookie');
 		const formData = new FormData();
 		formData.set('file', new File(['image'], 'logo.png', { type: 'image/png' }));
 
-		const uploadResponse = await worker.fetch(
+		const uploadResponse = await fetchWorker(
 			new Request('https://files.point.com/upload', {
 				method: 'POST',
-				headers: { Cookie: cookie.split(';')[0] },
+				headers: { Cookie: cookieValue(cookie) },
 				body: formData,
 			}),
 			env
@@ -414,7 +440,12 @@ describe('cache purge helpers', () => {
 	});
 
 	test('posts matching URLs to the Cloudflare purge API', async () => {
+		/** @type {{ url: string, init: any }[]} */
 		const calls = [];
+		/**
+		 * @param {string} url
+		 * @param {RequestInit} [init]
+		 */
 		const fetchImpl = async (url, init) => {
 			calls.push({ url, init });
 			return new Response(JSON.stringify({ success: true }), { status: 200 });
@@ -428,18 +459,22 @@ describe('cache purge helpers', () => {
 
 		expect(result).toEqual({ ok: true, skipped: false });
 		expect(calls).toHaveLength(1);
-		expect(calls[0].url).toBe('https://api.cloudflare.com/client/v4/zones/zone-1/purge_cache');
-		expect(calls[0].init.headers.Authorization).toBe('Bearer token-1');
-		expect(JSON.parse(calls[0].init.body)).toEqual({ files: ['https://files.point.com/logo.png'] });
+		expect(calls[0]?.url).toBe('https://api.cloudflare.com/client/v4/zones/zone-1/purge_cache');
+		expect(calls[0]?.init.headers.Authorization).toBe('Bearer token-1');
+		expect(JSON.parse(calls[0]?.init.body)).toEqual({ files: ['https://files.point.com/logo.png'] });
 	});
 });
 
 describe('replace uploaded files', () => {
+	/**
+	 * @param {object} env
+	 * @param {{ key: string, name: string, type?: string, cookie?: string }} options
+	 */
 	async function replaceRequest(env, { key, name, type = 'image/png', cookie }) {
 		const formData = new FormData();
 		formData.set('file', new File(['new-bytes'], name, { type }));
 		formData.set('key', key);
-		return worker.fetch(
+		return fetchWorker(
 			new Request('https://files.point.com/api/replace-file', {
 				method: 'POST',
 				headers: cookie ? { Cookie: cookie } : undefined,
@@ -450,7 +485,9 @@ describe('replace uploaded files', () => {
 	}
 
 	test('overwrites an existing uploaded object and purges its CDN URL', async () => {
+		/** @type {{ key: string, options: unknown }[]} */
 		const puts = [];
+		/** @type {{ url: RequestInfo | URL, init?: RequestInit }[]} */
 		const fetchCalls = [];
 		const env = {
 			...PASSWORDS,
@@ -458,12 +495,12 @@ describe('replace uploaded files', () => {
 			CF_ZONE_ID: 'zone-1',
 			CF_API_TOKEN: 'token-1',
 			CDN_BUCKET: {
-				head: async (key) => (key === 'logo.png' ? { httpMetadata: { contentType: 'image/png' } } : null),
-				put: async (key, _body, options) => puts.push({ key, options }),
+				head: async (/** @type {string} */ key) => (key === 'logo.png' ? { httpMetadata: { contentType: 'image/png' } } : null),
+				put: async (/** @type {string} */ key, /** @type {unknown} */ _body, /** @type {unknown} */ options) => puts.push({ key, options }),
 			},
 		};
 		const originalFetch = globalThis.fetch;
-		globalThis.fetch = async (url, init) => {
+		globalThis.fetch = async (/** @type {RequestInfo | URL} */ url, /** @type {RequestInit | undefined} */ init) => {
 			fetchCalls.push({ url, init });
 			return new Response(JSON.stringify({ success: true }), { status: 200 });
 		};
@@ -482,7 +519,7 @@ describe('replace uploaded files', () => {
 			expect(puts).toEqual([
 				{ key: 'logo.png', options: { httpMetadata: { contentType: 'image/png' } } },
 			]);
-			expect(fetchCalls[0].url).toContain('/zones/zone-1/purge_cache');
+			expect(fetchCalls[0]?.url).toContain('/zones/zone-1/purge_cache');
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
@@ -501,7 +538,7 @@ describe('replace uploaded files', () => {
 		expect(unauthenticated.status).toBe(401);
 
 		const cookie = await authenticatedCookie('/browse', PASSWORDS.UPLOAD_PASSWORD);
-		const missing = await worker.fetch(
+		const missing = await fetchWorker(
 			new Request('https://files.point.com/api/replace-file', {
 				method: 'POST',
 				headers: { Cookie: cookie },
@@ -534,19 +571,20 @@ describe('replace uploaded files', () => {
 	});
 
 	test('upload still suffixes instead of overwriting an existing name', async () => {
+		/** @type {string[]} */
 		const puts = [];
 		const env = {
 			...PASSWORDS,
 			CDN_BUCKET: {
-				get: async (key) => (key === 'logo.png' ? { key } : null),
-				put: async (key) => puts.push(key),
+				get: async (/** @type {string} */ key) => (key === 'logo.png' ? { key } : null),
+				put: async (/** @type {string} */ key) => puts.push(key),
 			},
 		};
 		const cookie = await authenticatedCookie('/upload', PASSWORDS.UPLOAD_PASSWORD);
 		const formData = new FormData();
 		formData.set('file', new File(['image'], 'logo.png', { type: 'image/png' }));
 
-		const response = await worker.fetch(
+		const response = await fetchWorker(
 			new Request('https://files.point.com/upload', {
 				method: 'POST',
 				headers: { Cookie: cookie },

@@ -33,7 +33,7 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 
 ### ⚡ Performance Optimizations
 
-- **Gzip Compression**: Automatic compression for text-based assets in `/code` directory
+- **Compression**: Handled by Cloudflare's automatic compression; the worker does not gzip responses itself
 - **Content Type Detection**: Proper MIME type headers for 20+ file formats
 - **Preview vs Download Modes**: Intelligent content disposition based on file type
 - **Streaming Support**: Range request handling for video files (MP4)
@@ -143,10 +143,9 @@ CODE_PASSWORD=another-secure-password
 # Cache purge for in-place replace (same zone credentials as pdc-code deploys)
 CF_ZONE_ID=your-files-point-com-zone-id
 CF_API_TOKEN=your-cache-purge-token
-
-# CORS Configuration (automatically configured)
-ALLOWED_ORIGINS=https://www.point.dev,https://point.com,https://files.point.com,https://scorecredit.com,https://scorecredit.webflow.io
 ```
+
+CORS origins are **not** an environment variable. The allowlist is the hardcoded `ALLOWED_ORIGINS` array in `src/index.js` (plus any `*.webflow.io` subdomain containing `new-point`); change the code to change it.
 
 `CF_ZONE_ID` can be a Wrangler var. `CF_API_TOKEN` must be a secret with **Zone.Cache Purge** permission for the `files.point.com` zone. Without both, Replace still writes the new object to R2, but Cloudflare may keep serving the previous edge copy until it expires.
 
@@ -155,7 +154,7 @@ ALLOWED_ORIGINS=https://www.point.dev,https://point.com,https://files.point.com,
 ```toml
 name = "marketing-cdn"
 main = "src/index.js"
-compatibility_date = "2024-12-05"
+compatibility_date = "2025-09-15"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 preview_urls = true
@@ -193,10 +192,10 @@ head_sampling_rate = 1
 1. **Install dependencies:**
 
 ```bash
-npm install
-# or
-bun install
+npm ci
 ```
+
+npm is the package manager (`package-lock.json`); there is no Bun lockfile.
 
 2. **Login to Cloudflare:**
 
@@ -216,16 +215,12 @@ wrangler secret put CF_API_TOKEN
 
 ```bash
 npm run dev
-# or
-bun run dev
 ```
 
 5. **Deploy to production:**
 
 ```bash
 npm run deploy
-# or
-bun run deploy
 ```
 
 ### Development Commands
@@ -233,6 +228,12 @@ bun run deploy
 ```bash
 # Start local development server
 npm run dev
+
+# Typecheck (wrangler types --check + tsc) and run tests; CI runs this
+npm run check
+
+# Regenerate worker-configuration.d.ts after changing wrangler.toml
+npm run wrangler:types
 
 # Deploy to Cloudflare Workers
 npm run deploy
@@ -245,9 +246,7 @@ wrangler dev
 
 ### Compression Logic
 
-- **Automatic Gzip**: Applied to JS, CSS, HTML, JSON, SVG, XML, TXT files in `/code` directory
-- **Smart Compression**: Only compresses when `Accept-Encoding: gzip` is present
-- **Fallback Handling**: Gracefully falls back to uncompressed content on compression errors
+- The worker returns R2 bodies uncompressed and relies on Cloudflare's automatic edge compression
 
 ### CORS Handling
 

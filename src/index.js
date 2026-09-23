@@ -4,6 +4,7 @@ import browseFilesHtml from './ui/browse-files.html';
 import passwordHtml from './ui/password.html';
 import codeBrowserHtml from './ui/code-browser.html';
 
+/** @type {Record<string, string>} */
 const CONTENT_TYPES = {
 	js: 'application/javascript',
 	css: 'text/css',
@@ -49,16 +50,29 @@ const ALLOWED_ORIGINS = [
 ];
 
 const AUTH_SESSION_SECONDS = 24 * 60 * 60;
+/** @type {Record<AuthScope, string>} */
 const AUTH_COOKIE_NAMES = {
 	browse: 'cdn_browse_auth',
 	code: 'cdn_code_auth',
 };
+/** @typedef {'browse' | 'code'} AuthScope */
+/** @typedef {{ key: string, uploaded: Date }} FileEntry */
+
 const textEncoder = new TextEncoder();
 
+/**
+ * @param {string} secret
+ * @param {string[]} usages
+ */
 async function importHmacKey(secret, usages) {
 	return crypto.subtle.importKey('raw', textEncoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, usages);
 }
 
+/**
+ * @param {unknown} candidate
+ * @param {unknown} expected
+ * @returns {Promise<boolean>}
+ */
 export async function verifyPassword(candidate, expected) {
 	if (typeof candidate !== 'string' || typeof expected !== 'string' || expected.length === 0) {
 		return false;
@@ -71,6 +85,7 @@ export async function verifyPassword(candidate, expected) {
 	return crypto.subtle.verify('HMAC', candidateKey, signature, challenge);
 }
 
+/** @param {Uint8Array} bytes */
 function bytesToBase64Url(bytes) {
 	let binary = '';
 	for (const byte of bytes) {
@@ -79,6 +94,7 @@ function bytesToBase64Url(bytes) {
 	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/** @param {string} value */
 function base64UrlToBytes(value) {
 	try {
 		const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
@@ -89,6 +105,10 @@ function base64UrlToBytes(value) {
 	}
 }
 
+/**
+ * @param {AuthScope} scope
+ * @param {string} secret
+ */
 async function createAuthToken(scope, secret, now = Date.now()) {
 	const expiresAt = Math.floor(now / 1000) + AUTH_SESSION_SECONDS;
 	const payload = `${scope}:${expiresAt}`;
@@ -97,6 +117,12 @@ async function createAuthToken(scope, secret, now = Date.now()) {
 	return `${expiresAt}.${bytesToBase64Url(new Uint8Array(signature))}`;
 }
 
+/**
+ * @param {unknown} token
+ * @param {AuthScope} scope
+ * @param {unknown} secret
+ * @returns {Promise<boolean>}
+ */
 export async function verifyAuthToken(token, scope, secret, now = Date.now()) {
 	if (typeof token !== 'string' || typeof secret !== 'string' || secret.length === 0) {
 		return false;
@@ -118,6 +144,10 @@ export async function verifyAuthToken(token, scope, secret, now = Date.now()) {
 	return crypto.subtle.verify('HMAC', key, signature, textEncoder.encode(`${scope}:${expiresAtString}`));
 }
 
+/**
+ * @param {Request} request
+ * @param {string} name
+ */
 function getCookie(request, name) {
 	const cookieHeader = request.headers.get('Cookie');
 	if (!cookieHeader) {
@@ -133,15 +163,25 @@ function getCookie(request, name) {
 	return null;
 }
 
+/**
+ * @param {Request} request
+ * @param {AuthScope} scope
+ * @param {string} secret
+ */
 async function isAuthenticated(request, scope, secret) {
 	return verifyAuthToken(getCookie(request, AUTH_COOKIE_NAMES[scope]), scope, secret);
 }
 
+/**
+ * @param {AuthScope} scope
+ * @param {string} secret
+ */
 async function getAuthCookie(scope, secret) {
 	const token = await createAuthToken(scope, secret);
 	return `${AUTH_COOKIE_NAMES[scope]}=${token}; Path=/; Max-Age=${AUTH_SESSION_SECONDS}; HttpOnly; Secure; SameSite=Strict`;
 }
 
+/** @param {Record<string, string>} [additionalHeaders] */
 function secureHtmlHeaders(additionalHeaders = {}) {
 	return {
 		'Content-Type': 'text/html',
@@ -163,6 +203,7 @@ function unauthorizedJsonResponse() {
 }
 
 // Check if origin is a valid Webflow branch containing "new-point"
+/** @param {unknown} origin */
 function isValidWebflowBranch(origin) {
 	if (!origin || typeof origin !== 'string') return false;
 
@@ -182,11 +223,16 @@ function isValidWebflowBranch(origin) {
 // Font assets must be publicly usable by external rendering services such as Lob.
 // Keep this scoped to the dedicated staging/prod font directories so other code
 // assets retain the existing origin allowlist.
+/** @param {string} path */
 export function isPublicFontAsset(path) {
 	return /^code\/(?:staging|prod)\/fonts\//.test(path);
 }
 
 // Generate unique filename by adding -1, -2, etc. if file exists
+/**
+ * @param {R2Bucket} bucket
+ * @param {string} originalName
+ */
 async function getUniqueFilename(bucket, originalName) {
 	// Replace spaces with dashes for cleaner URLs
 	originalName = originalName.replace(/ /g, '-');
@@ -210,6 +256,7 @@ async function getUniqueFilename(bucket, originalName) {
 	return filename;
 }
 
+/** @param {string} name */
 export function fileExtension(name) {
 	const lastDot = name.lastIndexOf('.');
 	if (lastDot <= 0) {
@@ -218,10 +265,15 @@ export function fileExtension(name) {
 	return name.slice(lastDot + 1).toLowerCase();
 }
 
+/**
+ * @param {string} existingKey
+ * @param {string} uploadName
+ */
 export function fileExtensionsMatch(existingKey, uploadName) {
 	return fileExtension(existingKey) === fileExtension(uploadName);
 }
 
+/** @param {unknown} key */
 export function isReplaceableUploadKey(key) {
 	if (typeof key !== 'string' || key.length === 0 || key.length > 1024) {
 		return false;
@@ -236,17 +288,31 @@ export function isReplaceableUploadKey(key) {
 	return !PROTECTED_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
+/**
+ * @param {{ CDN_PUBLIC_BASE?: string } | undefined} env
+ * @param {string} requestUrl
+ */
 export function publicCdnBase(env, requestUrl) {
 	const configured = typeof env?.CDN_PUBLIC_BASE === 'string' ? env.CDN_PUBLIC_BASE.trim() : '';
 	return (configured || new URL(requestUrl).origin || DEFAULT_CDN_PUBLIC_BASE).replace(/\/$/, '');
 }
 
+/**
+ * @param {string} publicBase
+ * @param {string} key
+ */
 export function purgeUrlsForCdnKey(publicBase, key) {
 	const encodedKey = key.split('/').map(encodeURIComponent).join('/');
 	const url = `${publicBase.replace(/\/$/, '')}/${encodedKey}`;
 	return [url, `${url}?download=true`];
 }
 
+/**
+ * @param {{ CF_ZONE_ID?: string, CF_API_TOKEN?: string } | undefined} env
+ * @param {string[]} urls
+ * @param {(input: string, init?: RequestInit) => Promise<Response>} [fetchImpl]
+ * @returns {Promise<{ ok: boolean, skipped: boolean }>}
+ */
 export async function purgeCloudflareFiles(env, urls, fetchImpl = fetch) {
 	const zoneId = typeof env?.CF_ZONE_ID === 'string' ? env.CF_ZONE_ID.trim() : '';
 	const token = typeof env?.CF_API_TOKEN === 'string' ? env.CF_API_TOKEN.trim() : '';
@@ -276,6 +342,7 @@ export async function purgeCloudflareFiles(env, urls, fetchImpl = fetch) {
 	}
 }
 
+/** @param {string} key */
 function extensionMismatchMessage(key) {
 	const extension = fileExtension(key);
 	return extension
@@ -284,6 +351,10 @@ function extensionMismatchMessage(key) {
 }
 
 // Simple fuzzy search scoring function
+/**
+ * @param {string} filename
+ * @param {string} query
+ */
 function fuzzyScore(filename, query) {
 	if (!query) return 1; // Perfect score if no query
 
@@ -325,6 +396,10 @@ function fuzzyScore(filename, query) {
 }
 
 // Helper function to score matching between individual parts
+/**
+ * @param {string} filenamePart
+ * @param {string} queryPart
+ */
 function fuzzyMatchPart(filenamePart, queryPart) {
 	if (filenamePart.includes(queryPart)) return 1;
 
@@ -357,6 +432,13 @@ function fuzzyMatchPart(filenamePart, queryPart) {
 }
 
 // Get list of files from R2 bucket with optional search, environment, and folder filters
+/**
+ * @param {R2Bucket} bucket
+ * @param {string} [search]
+ * @param {string} [env]
+ * @param {string} [folder]
+ * @returns {Promise<{ files: FileEntry[], folders: string[] }>}
+ */
 async function getFilesList(bucket, search = '', env = 'all', folder = 'all') {
 	try {
 		const objects = await bucket.list();
@@ -429,6 +511,11 @@ async function getFilesList(bucket, search = '', env = 'all', folder = 'all') {
 }
 
 // List all files NOT in the code/ directory (for the simple /browse view)
+/**
+ * @param {R2Bucket} bucket
+ * @param {string} [search]
+ * @returns {Promise<{ files: FileEntry[] }>}
+ */
 async function getFilesListSimple(bucket, search = '') {
 	try {
 		const objects = await bucket.list();
@@ -446,7 +533,7 @@ async function getFilesListSimple(bucket, search = '') {
 		}
 
 		// Sort newest first
-		files.sort((a, b) => new Date(b.uploaded) - new Date(a.uploaded));
+		files.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
 
 		return { files };
 	} catch (error) {
@@ -455,6 +542,7 @@ async function getFilesListSimple(bucket, search = '') {
 	}
 }
 
+/** @param {unknown} value */
 export function escapeHtml(value) {
 	return String(value)
 		.replace(/&/g, '&amp;')
@@ -464,6 +552,10 @@ export function escapeHtml(value) {
 		.replace(/'/g, '&#39;');
 }
 
+/**
+ * @param {string} template
+ * @param {Record<string, string>} replacements
+ */
 function fillTemplate(template, replacements) {
 	let result = template;
 	for (const [token, value] of Object.entries(replacements)) {
@@ -474,6 +566,10 @@ function fillTemplate(template, replacements) {
 
 const UPLOAD_FORM_HTML = uploadHtml;
 
+/**
+ * @param {string} filename
+ * @param {string} cdnUrl
+ */
 function getSuccessHTML(filename, cdnUrl) {
 	return fillTemplate(successHtml, {
 		__FILENAME__: escapeHtml(filename),
@@ -485,6 +581,12 @@ function getBrowseFilesHTML() {
 	return browseFilesHtml;
 }
 
+/**
+ * @param {string} browserName
+ * @param {string} [errorMessage]
+ * @param {string} [submitLabel]
+ * @param {string} [description]
+ */
 function getBrowserPasswordHTML(
 	browserName,
 	errorMessage = '',
@@ -508,6 +610,11 @@ function getBrowseHTML() {
 
 
 export default {
+	/**
+	 * @param {Request} request
+	 * @param {Env} env
+	 * @returns {Promise<Response>}
+	 */
 	async fetch(request, env) {
 		try {
 			// Parse the URL and get the pathname
@@ -523,7 +630,7 @@ export default {
 						});
 					}
 
-					return new Response(getBrowseFilesHTML(url.origin), {
+					return new Response(getBrowseFilesHTML(), {
 						headers: secureHtmlHeaders(),
 					});
 				}
@@ -543,7 +650,7 @@ export default {
 							status: 303,
 							headers: {
 								Location: '/browse',
-								'Set-Cookie': await getAuthCookie('browse', env.UPLOAD_PASSWORD),
+								'Set-Cookie': await getAuthCookie('browse', /** @type {string} */ (env.UPLOAD_PASSWORD)),
 								'Cache-Control': 'no-store',
 							},
 						});
@@ -568,7 +675,7 @@ export default {
 						});
 					}
 
-					return new Response(getBrowseHTML(url.origin), {
+					return new Response(getBrowseHTML(), {
 						headers: secureHtmlHeaders(),
 					});
 				}
@@ -589,7 +696,7 @@ export default {
 							status: 303,
 							headers: {
 								Location: '/code',
-								'Set-Cookie': await getAuthCookie('code', env.CODE_PASSWORD),
+								'Set-Cookie': await getAuthCookie('code', /** @type {string} */ (env.CODE_PASSWORD)),
 								'Cache-Control': 'no-store',
 							},
 						});
@@ -827,7 +934,7 @@ export default {
 						}
 
 						// Only allow HTML files for content fetching
-						const extension = filename.split('.').pop().toLowerCase();
+						const extension = /** @type {string} */ (filename.split('.').pop()).toLowerCase();
 						if (extension !== 'html' && extension !== 'htm') {
 							return new Response(JSON.stringify({ error: 'Only HTML files are supported' }), {
 								status: 400,
@@ -927,14 +1034,14 @@ export default {
 								status: 303,
 								headers: {
 									Location: '/upload',
-									'Set-Cookie': await getAuthCookie('browse', env.UPLOAD_PASSWORD),
+									'Set-Cookie': await getAuthCookie('browse', /** @type {string} */ (env.UPLOAD_PASSWORD)),
 									'Cache-Control': 'no-store',
 								},
 							});
 						}
 
 						const formData = await request.formData();
-						const file = formData.get('file');
+						const file = /** @type {File | null} */ (formData.get('file'));
 
 						// Validate file
 						if (!file || file.size === 0) {
@@ -973,7 +1080,7 @@ export default {
 						// Return success page
 						return new Response(getSuccessHTML(file.name, cdnUrl), {
 							headers: secureHtmlHeaders({
-								'Set-Cookie': await getAuthCookie('browse', env.UPLOAD_PASSWORD),
+								'Set-Cookie': await getAuthCookie('browse', /** @type {string} */ (env.UPLOAD_PASSWORD)),
 							}),
 						});
 					} catch (error) {
@@ -1018,7 +1125,7 @@ export default {
 			if (!object) {
 				// Extract the raw (still-percent-encoded) path directly from request.url string
 				// by splitting on the host, avoiding the URL constructor's auto-decode.
-				const rawUrlPath = request.url.replace(/^https?:\/\/[^/]+/, '').split('?')[0].slice(1);
+				const rawUrlPath = /** @type {string} */ (request.url.replace(/^https?:\/\/[^/]+/, '').split('?')[0]).slice(1);
 				if (rawUrlPath !== path) {
 					object = await env.CDN_BUCKET.get(rawUrlPath);
 				}
@@ -1040,7 +1147,7 @@ export default {
 				const isCrossOriginRequest = origin || referer;
 				if (isCrossOriginRequest) {
 					const requestOrigin = origin || (referer ? new URL(referer).origin : null);
-					if (!ALLOWED_ORIGINS.includes(requestOrigin) && !isValidWebflowBranch(requestOrigin)) {
+					if (!ALLOWED_ORIGINS.includes(/** @type {string} */ (requestOrigin)) && !isValidWebflowBranch(requestOrigin)) {
 						return new Response('Forbidden', {
 							status: 403,
 							headers: { 'Content-Type': 'text/plain' },
@@ -1050,7 +1157,7 @@ export default {
 			}
 
 			// Determine content type based on file extension
-			const extension = path.split('.').pop().toLowerCase();
+			const extension = /** @type {string} */ (path.split('.').pop()).toLowerCase();
 			const contentType = CONTENT_TYPES[extension] || 'application/octet-stream';
 
 			// Prepare headers with caching
@@ -1094,7 +1201,7 @@ export default {
 				// Handle range requests
 				if (request.headers.has('range')) {
 					try {
-						const range = request.headers.get('range');
+						const range = /** @type {string} */ (request.headers.get('range'));
 						const size = object.size;
 						const match = /bytes=(\d*)-(\d*)/.exec(range);
 
