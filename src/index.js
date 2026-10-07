@@ -29,7 +29,11 @@ const CONTENT_TYPES = {
 export const BROWSER_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
 export const CLOUDFLARE_CACHE_CONTROL = 'public, max-age=31536000';
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-export const PROTECTED_PREFIXES = ['code/', 'analytics/', 'marketing-tools/', 'marketing/', 'careers/'];
+// Contract with marketing-tools (CDN Files): deleted uploads move under TRASH_PREFIX, and a rename
+// can leave an empty placeholder at the old key whose custom metadata names the new key.
+export const TRASH_PREFIX = '_trash/';
+export const REDIRECT_METADATA_KEY = 'cdn-redirect-to';
+export const PROTECTED_PREFIXES = ['code/', 'analytics/', 'marketing-tools/', 'marketing/', 'careers/', TRASH_PREFIX];
 const DEFAULT_CDN_PUBLIC_BASE = 'https://files.point.com';
 
 // File types that should be previewed in browser
@@ -220,6 +224,16 @@ export function fileExtension(name) {
 
 export function fileExtensionsMatch(existingKey, uploadName) {
 	return fileExtension(existingKey) === fileExtension(uploadName);
+}
+
+// The new key a rename placeholder points at, or null for an ordinary object. Protected folders never
+// redirect, so a stray metadata value cannot send a point.com script somewhere else.
+export function redirectTargetKey(path, object) {
+	const target = object?.customMetadata?.[REDIRECT_METADATA_KEY];
+	if (!target || PROTECTED_PREFIXES.some((prefix) => path.startsWith(prefix)) || !isReplaceableUploadKey(target)) {
+		return null;
+	}
+	return target;
 }
 
 export function isReplaceableUploadKey(key) {
@@ -431,10 +445,14 @@ async function getFilesList(bucket, search = '', env = 'all', folder = 'all') {
 // List all files NOT in the code/ directory (for the simple /browse view)
 async function getFilesListSimple(bucket, search = '') {
 	try {
-		const objects = await bucket.list();
-		let files = objects.objects.map((obj) => ({ key: obj.key, uploaded: obj.uploaded }));
+		const objects = await bucket.list({ include: ['customMetadata'] });
+		let files = objects.objects.map((obj) => ({
+			key: obj.key,
+			uploaded: obj.uploaded,
+			redirectTo: obj.customMetadata?.[REDIRECT_METADATA_KEY] ?? null,
+		}));
 
-		// Hide code, leftover analytics, and tool namespaces (PDF/logo galleries, careers embeds).
+		// Hide code, leftover analytics, tool namespaces (PDF/logo galleries, careers embeds), and trash.
 		files = files.filter((file) => !PROTECTED_PREFIXES.some((prefix) => file.key.startsWith(prefix)));
 
 		// Filter by search term if provided (fuzzy search)
@@ -615,11 +633,11 @@ export default {
 
 						const search = url.searchParams.get('search') || '';
 						const { files } = await getFilesListSimple(env.CDN_BUCKET, search);
-						const fileData = files.map(({ key, uploaded }) => ({
+						const fileData = files.map(({ key, uploaded, redirectTo }) => ({
 							key,
 							url: encodeURI(`${url.origin}/${key}`),
 							lastModified: uploaded,
-							replaceable: isReplaceableUploadKey(key),
+							replaceable: isReplaceableUploadKey(key) && !redirectTo,
 						}));
 						return new Response(JSON.stringify({ files: fileData }), {
 							headers: {
@@ -679,6 +697,12 @@ export default {
 						if (!existing) {
 							return new Response(JSON.stringify({ error: 'File not found. Upload it as a new file instead.' }), {
 								status: 404,
+								headers: { 'Content-Type': 'application/json' },
+							});
+						}
+						if (existing.customMetadata?.[REDIRECT_METADATA_KEY]) {
+							return new Response(JSON.stringify({ error: 'That URL is a redirect, not a file' }), {
+								status: 409,
 								headers: { 'Content-Type': 'application/json' },
 							});
 						}
@@ -1010,6 +1034,11 @@ export default {
 				return Response.redirect('https://point.com', 302);
 			}
 
+			// Trashed uploads are never served; they read as missing.
+			if (path.startsWith(TRASH_PREFIX)) {
+				return Response.redirect('https://point.com', 302);
+			}
+
 			// Get the file from R2
 			// url.pathname is decoded by the URL constructor (%20 -> space).
 			// We also try decodeURIComponent in case of double-encoding, and the
@@ -1027,6 +1056,21 @@ export default {
 			if (!object) {
 				// Redirect 404s to point.com
 				return Response.redirect('https://point.com', 302);
+			}
+
+			// Rename placeholder: read from the object already fetched, so ordinary files cost nothing extra.
+			// no-store keeps the redirect out of every cache, so removing it takes effect at once.
+			const redirectKey = redirectTargetKey(path, object);
+			if (redirectKey) {
+				const target = redirectKey.split('/').map(encodeURIComponent).join('/');
+				return new Response(null, {
+					status: 302,
+					headers: {
+						Location: `${publicCdnBase(env, request.url)}/${target}${url.search}`,
+						'Cache-Control': 'no-store',
+						'Access-Control-Allow-Origin': '*',
+					},
+				});
 			}
 
 			const origin = request.headers.get('Origin');

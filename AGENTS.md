@@ -35,3 +35,8 @@
 - Return appropriate HTTP status codes (400, 401, 404, 416, 500)
 - Provide user-friendly HTML error pages for upload failures
 - Graceful fallbacks (e.g., range request errors fall back to full file)
+## Contract with marketing-tools (CDN Files)
+- Both Workers share the `marketing-cdn` R2 bucket; file management lives in the marketing-tools hub
+- `_trash/` (`TRASH_PREFIX`): deleted uploads; never served (reads as missing) and protected from replace
+- `cdn-redirect-to` (`REDIRECT_METADATA_KEY`): custom metadata on an empty placeholder left at a renamed file's old key; serving answers 302 (`no-store`) to the new key, reusing the object it already fetched. Ignored in `PROTECTED_PREFIXES` and for unsafe targets
+- Serving changes must keep the "asset serving contract" tests passing unchanged; ship with `wrangler versions upload` + `Cloudflare-Workers-Version-Overrides` checks before shifting traffic
