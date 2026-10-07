@@ -1,10 +1,10 @@
 # Marketing CDN
 
-A sophisticated content delivery network (CDN) powered by Cloudflare Workers and R2 storage for serving Point.com marketing assets with advanced features including file uploads, compression, and streaming capabilities.
+A content delivery network (CDN) powered by Cloudflare Workers and R2 storage that serves Point.com marketing assets and site code from `files.point.com`.
 
 ## Overview
 
-This CDN serves marketing assets through Cloudflare's global edge network, providing fast and reliable content delivery. It uses Cloudflare Workers for intelligent request handling, R2 for scalable asset storage, and includes a web-based upload interface for easy asset management.
+This Worker only serves files. Uploading, replacing, renaming, deleting, and browsing CDN files (and the PDC code browser) live in the [marketing-tools hub](https://marketing-tools.ops-1df.workers.dev) behind Google sign-in and per-user permissions. `files.point.com/upload`, `/browse`, and `/code` redirect there.
 
 ## Key Features
 
@@ -15,21 +15,18 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 - **Custom Domain Support**: Serves assets from `files.point.com`
 - **Intelligent Caching**: Optimized cache headers with ETags and Last-Modified
 
-### 📤 File Upload System
+### 📁 File Management (marketing-tools hub)
 
-- **Web-based Upload Interface**: Accessible at `/upload` with password protection
-- **Automatic File Deduplication**: Uploads never overwrite; duplicate names get incremental suffixes (-1, -2, etc.)
-- **In-place Replace**: Browse pages can replace an uploaded file while keeping the same public URL
-- **Success Page with URL Copying**: User-friendly upload confirmation with shareable links
-- **Multiple Upload Methods**: Web interface, Cloudflare Dashboard, AWS S3 API, or Wrangler CLI
+- **Upload & replace**: any signed-in point.com account; uploads never overwrite (duplicate names get `-1`, `-2`, …)
+- **Rename, delete, restore, redirects**: people granted *Manage CDN files* on the hub Admin page
+- **Rename redirects**: a rename can leave an empty placeholder at the old key (`cdn-redirect-to` custom metadata); this Worker answers it with a `no-store` 302 to the new key
+- **Trash**: deleted uploads move under `_trash/`, which this Worker never serves
 
 ### 🔒 Security & Access Control
 
-- **CORS Protection**: Whitelist-based origin validation for cross-origin requests
-- **Password-Protected Tools**: Upload and browse share one password; code management uses a separate credential
-- **Secure Browser Sessions**: Signed, short-lived `HttpOnly` cookies keep credentials out of URLs and client-side code
-- **Asset Path Validation**: Prevents unauthorized access patterns
-- **Origin-based Access Control**: Restricts access based on request origin
+- **CORS Protection**: Whitelist-based origin validation for `code/` assets
+- **No credentials here**: this Worker has no admin routes, passwords, or sessions
+- **Asset Path Validation**: Redirect metadata is ignored in protected folders, so it can never redirect site code
 
 ### ⚡ Performance Optimizations
 
@@ -52,12 +49,8 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 │  (point.com,    │    │    (Workers)     │    │  (marketing-    │
 │ scorecredit.com)│    │                  │    │     cdn)        │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
-                              │
-                              ▼
-                       ┌──────────────────┐
-                       │  Upload Interface│
-                       │   (/upload)      │
-                       └──────────────────┘
+
+File management: marketing-tools hub ──▶ same R2 bucket
 ```
 
 ## Supported File Types
@@ -92,13 +85,9 @@ This CDN serves marketing assets through Cloudflare's global edge network, provi
 
 #### Web Interface (Recommended)
 
-1. Navigate to `https://files.point.com/upload`
-2. Enter the upload password to unlock the form
-3. Select your file (the password is not requested again while the session is valid)
-4. Click "Upload File"
-5. Copy the generated CDN URL
+Use **Upload & browse files** in the [marketing-tools hub](https://marketing-tools.ops-1df.workers.dev/tools/cdn-files) (`files.point.com/upload` redirects there) and sign in with your point.com Google account.
 
-Uploads never overwrite an existing object. If `logo.png` is already on the CDN, the new file is stored as `logo-1.png`. To keep the same URL, open `/browse` and use **Replace** on that file.
+Uploads never overwrite an existing object. If `logo.png` is already on the CDN, the new file is stored as `logo-1.png`. To keep the same URL, use **Replace** on that file. People with *Manage CDN files* can also rename (optionally leaving a redirect), delete to Trash, and restore.
 
 #### Alternative Methods
 
@@ -136,19 +125,11 @@ Required environment variables in your Cloudflare Worker:
 CDN_BUCKET=marketing-cdn
 CDN_PUBLIC_BASE=https://files.point.com
 
-# Tool Security (configure each value as a Wrangler secret)
-UPLOAD_PASSWORD=your-secure-password   # also unlocks /browse
-CODE_PASSWORD=another-secure-password
-
-# Cache purge for in-place replace (same zone credentials as pdc-code deploys)
-CF_ZONE_ID=your-files-point-com-zone-id
-CF_API_TOKEN=your-cache-purge-token
-
 # CORS Configuration (automatically configured)
 ALLOWED_ORIGINS=https://www.point.dev,https://point.com,https://files.point.com,https://scorecredit.com,https://scorecredit.webflow.io
 ```
 
-`CF_ZONE_ID` can be a Wrangler var. `CF_API_TOKEN` must be a secret with **Zone.Cache Purge** permission for the `files.point.com` zone. Without both, Replace still writes the new object to R2, but Cloudflare may keep serving the previous edge copy until it expires.
+Cache purges for replace, rename, and delete happen in the marketing-tools hub, which holds the zone credentials.
 
 ### Wrangler Configuration (`wrangler.toml`)
 
@@ -173,7 +154,6 @@ bucket_name = "marketing-cdn"
 
 [vars]
 CDN_PUBLIC_BASE = "https://files.point.com"
-CF_ZONE_ID = "your-files-point-com-zone-id"
 
 [observability]
 enabled = true
@@ -204,15 +184,7 @@ bun install
 wrangler login
 ```
 
-3. **Configure environment variables:**
-
-```bash
-wrangler secret put UPLOAD_PASSWORD
-wrangler secret put CODE_PASSWORD
-wrangler secret put CF_API_TOKEN
-```
-
-4. **Start development server:**
+3. **Start development server:**
 
 ```bash
 npm run dev
@@ -220,7 +192,7 @@ npm run dev
 bun run dev
 ```
 
-5. **Deploy to production:**
+4. **Deploy to production** (serving changes: upload a version and check it with `Cloudflare-Workers-Version-Overrides` before shifting traffic; see AGENTS.md):
 
 ```bash
 npm run deploy
@@ -260,30 +232,27 @@ wrangler dev
 ### Error Handling
 
 - **404 Redirects**: Automatically redirects missing files to point.com
-- **Upload Errors**: User-friendly error pages for upload failures
+- **Trash and redirects**: `_trash/` paths read as missing; rename placeholders answer 302 with `no-store`
 - **Range Request Errors**: Graceful fallback for invalid range requests
 
 ## Security Best Practices
 
-- **Password Protection**: `/upload` and `/browse` share `UPLOAD_PASSWORD`; `/code` uses `CODE_PASSWORD`
-- **Public Asset URLs**: Direct file URLs (e.g. `https://files.point.com/logo.png`) remain publicly reachable; only management UIs and their APIs require auth
-- **Session Security**: Browser sessions expire after 24 hours and use signed `HttpOnly`, `Secure`, `SameSite=Strict` cookies; logging in through `/upload` or `/browse` unlocks both forms
+- **No admin surface**: management (and its Google sign-in and permissions) lives in the marketing-tools hub; this Worker holds no credentials
+- **Public Asset URLs**: Direct file URLs (e.g. `https://files.point.com/logo.png`) remain publicly reachable
 - **Origin Restrictions**: CORS policy prevents unauthorized cross-origin access
-- **Input Validation**: File size and type validation on uploads
 - **Error Sanitization**: No sensitive information exposed in error messages
 
 ## Monitoring & Observability
 
 - **Cloudflare Analytics**: Built-in request analytics and performance metrics
 - **Error Logging**: Comprehensive error logging with console.error()
-- **Upload Tracking**: Success/failure tracking for file uploads
 - **Performance Metrics**: Response time and cache hit rate monitoring
 
 ## Important Links
 
 - [Cloudflare Workers Dashboard](https://dash.cloudflare.com/workers/services/view/marketing-cdn)
 - [R2 Bucket Dashboard](https://dash.cloudflare.com/r2/default/buckets/marketing-cdn)
-- [Upload Interface](https://files.point.com/upload)
+- [Upload & browse files (marketing-tools hub)](https://marketing-tools.ops-1df.workers.dev/tools/cdn-files)
 
 ## Integration with PDC Code
 

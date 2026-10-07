@@ -5,7 +5,7 @@
 - `npm run deploy` - Deploy to Cloudflare Workers
 - `wrangler dev` - Alternative dev command
 - `npm test` - Run Vitest unit tests
-- POST `/api/replace-file` overwrites an existing uploaded object (not `code/`, `analytics/`, `marketing-tools/`, `marketing/`, or `careers/`) and purges Cloudflare cache for that URL
+- This Worker only serves files; `/upload`, `/browse`, and `/code` 302 to the marketing-tools hub, which owns all file management
 
 ## Code Style & Formatting
 - **Indentation**: Tabs (configured in .editorconfig and .prettierrc)
@@ -24,16 +24,15 @@
 - JSX: react-jsx (though not used in current code)
 
 ## Naming Conventions
-- Constants: SCREAMING_SNAKE_CASE (e.g., CONTENT_TYPES, UPLOAD_FORM_HTML)
-- Functions: camelCase (e.g., getUniqueFilename, getSuccessHTML)
+- Constants: SCREAMING_SNAKE_CASE (e.g., CONTENT_TYPES, PROTECTED_PREFIXES)
+- Functions: camelCase (e.g., redirectTargetKey, publicCdnBase)
 - Variables: camelCase
 - File extensions in lowercase for content type mapping
 
 ## Error Handling
 - Use try-catch blocks for async operations
 - Log errors with console.error()
-- Return appropriate HTTP status codes (400, 401, 404, 416, 500)
-- Provide user-friendly HTML error pages for upload failures
+- Return appropriate HTTP status codes (302 for missing files and redirects, 403, 416, 500)
 - Graceful fallbacks (e.g., range request errors fall back to full file)
 ## Contract with marketing-tools (CDN Files)
 - Both Workers share the `marketing-cdn` R2 bucket; file management lives in the marketing-tools hub
