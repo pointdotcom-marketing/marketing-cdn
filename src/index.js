@@ -85,6 +85,15 @@ export function redirectTargetKey(path, object) {
 	return target;
 }
 
+// Percent-decoded request path, or the path unchanged when it is not valid percent-encoding.
+export function decodePath(path) {
+	try {
+		return decodeURIComponent(path);
+	} catch {
+		return path;
+	}
+}
+
 export function isReplaceableUploadKey(key) {
 	if (typeof key !== 'string' || key.length === 0 || key.length > 1024) {
 		return false;
@@ -125,23 +134,30 @@ export default {
 				return Response.redirect('https://point.com', 302);
 			}
 
-			// Trashed uploads are never served; they read as missing.
-			if (path.startsWith(TRASH_PREFIX)) {
+			// Trashed uploads are never served; they read as missing. Checked on the decoded path too, so
+			// percent-encoding (/%5Ftrash/...) cannot reach them through the decoded lookup below.
+			const decodedPath = decodePath(path);
+			if (path.startsWith(TRASH_PREFIX) || decodedPath.startsWith(TRASH_PREFIX)) {
 				return Response.redirect('https://point.com', 302);
 			}
 
-			// Get the file from R2
-			// url.pathname is decoded by the URL constructor (%20 -> space).
-			// We also try decodeURIComponent in case of double-encoding, and the
-			// raw request URI path in case Cloudflare passes it through encoded.
-			let object = await env.CDN_BUCKET.get(path);
+			// Get the file from R2. url.pathname stays percent-encoded (a space arrives as %20), so the
+			// path is looked up as requested first, which keeps every existing hit unchanged. Only after a
+			// miss do we retry the raw request URI and then the decoded key (spaces, &, non-ASCII).
+			// Everything after this uses `key`, the key that actually matched.
+			let key = path;
+			let object = await env.CDN_BUCKET.get(key);
 			if (!object) {
-				// Extract the raw (still-percent-encoded) path directly from request.url string
-				// by splitting on the host, avoiding the URL constructor's auto-decode.
+				// Extract the raw path directly from request.url, in case it differs from url.pathname.
 				const rawUrlPath = request.url.replace(/^https?:\/\/[^/]+/, '').split('?')[0].slice(1);
 				if (rawUrlPath !== path) {
 					object = await env.CDN_BUCKET.get(rawUrlPath);
+					if (object) key = rawUrlPath;
 				}
+			}
+			if (!object && decodedPath !== path) {
+				object = await env.CDN_BUCKET.get(decodedPath);
+				if (object) key = decodedPath;
 			}
 
 			if (!object) {
@@ -151,7 +167,7 @@ export default {
 
 			// Rename placeholder: read from the object already fetched, so ordinary files cost nothing extra.
 			// no-store keeps the redirect out of every cache, so removing it takes effect at once.
-			const redirectKey = redirectTargetKey(path, object);
+			const redirectKey = redirectTargetKey(key, object);
 			if (redirectKey) {
 				const target = redirectKey.split('/').map(encodeURIComponent).join('/');
 				return new Response(null, {
@@ -168,8 +184,8 @@ export default {
 
 			// CORS: code/ files are restricted to allowed origins only.
 			// Font directory assets and all non-code files are public to any origin.
-			const isCodeFile = path.startsWith('code/');
-			const isPublicFontFile = isPublicFontAsset(path);
+			const isCodeFile = key.startsWith('code/');
+			const isPublicFontFile = isPublicFontAsset(key);
 			if (isCodeFile && !isPublicFontFile) {
 				const referer = request.headers.get('Referer');
 				const isCrossOriginRequest = origin || referer;
@@ -185,7 +201,7 @@ export default {
 			}
 
 			// Determine content type based on file extension
-			const extension = path.split('.').pop().toLowerCase();
+			const extension = key.split('.').pop().toLowerCase();
 			const contentType = CONTENT_TYPES[extension] || 'application/octet-stream';
 
 			// Prepare headers with caching
@@ -213,7 +229,7 @@ export default {
 
 			// Set Content-Disposition based on file type and download parameter
 			if (forceDownload) {
-				headers.set('Content-Disposition', `attachment; filename="${path.split('/').pop()}"`);
+				headers.set('Content-Disposition', `attachment; filename="${key.split('/').pop()}"`);
 			} else if (PREVIEW_TYPES.has(extension)) {
 				headers.set('Content-Disposition', 'inline');
 			}
@@ -264,7 +280,7 @@ export default {
 						}
 
 						const length = end - start + 1;
-						const ranged = await env.CDN_BUCKET.get(path, { range: { offset: start, length } });
+						const ranged = await env.CDN_BUCKET.get(key, { range: { offset: start, length } });
 						if (!ranged || !ranged.body) {
 							return new Response('Requested Range Not Satisfiable', {
 								status: 416,

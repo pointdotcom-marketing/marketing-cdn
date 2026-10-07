@@ -244,6 +244,42 @@ describe('rename redirects and trash', () => {
 	});
 });
 
+describe('percent-encoded keys', () => {
+	test('a miss on the path as requested retries the decoded key', async () => {
+		const { response, lookups } = await serve('/guides/new%20guide.pdf', { 'guides/new guide.pdf': { body: 'pdf' } });
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe('pdf');
+		expect(lookups).toEqual(['guides/new%20guide.pdf', 'guides/new guide.pdf']);
+	});
+
+	test('a redirect to a key with a space resolves when followed', async () => {
+		const objects = {
+			'old-guide.pdf': { body: '', customMetadata: { [REDIRECT_METADATA_KEY]: 'guides/new guide.pdf' } },
+			'guides/new guide.pdf': { body: 'pdf' },
+		};
+		const first = await serve('/old-guide.pdf', objects);
+		const location = new URL(first.response.headers.get('Location'));
+		const followed = await serve(location.pathname + location.search, objects);
+		expect(followed.response.status).toBe(200);
+		expect(await followed.response.text()).toBe('pdf');
+	});
+
+	test('encoding cannot reach trash or skip the code/ CORS check', async () => {
+		const trash = await serve('/%5Ftrash/2026-10-07/guide.pdf', { '_trash/2026-10-07/guide.pdf': {} });
+		expect(trash.response.headers.get('Location')).toMatch(/^https:\/\/point\.com\/?$/);
+		expect(trash.lookups).toEqual([]);
+
+		const blocked = await serve('/%63ode/prod/js/app.js', { 'code/prod/js/app.js': {} }, { headers: { Origin: 'https://evil.example' } });
+		expect(blocked.response.status).toBe(403);
+	});
+
+	test('malformed percent-encoding is looked up once and falls back to point.com', async () => {
+		const { response, lookups } = await serve('/bad%E0%A4%A.png', {});
+		expect(response.status).toBe(302);
+		expect(lookups).toEqual(['bad%E0%A4%A.png']);
+	});
+});
+
 describe('retired admin pages', () => {
 	test('upload, browse, and code redirect to the marketing-tools hub without touching R2', async () => {
 		const bucket = {
