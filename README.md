@@ -4,7 +4,15 @@ A content delivery network (CDN) powered by Cloudflare Workers and R2 storage th
 
 ## Overview
 
-This Worker only serves files. Uploading, replacing, renaming, deleting, and browsing CDN files (and the PDC code browser) live in the [marketing-tools hub](https://marketing-tools.ops-1df.workers.dev) behind Google sign-in and per-user permissions. `files.point.com/upload`, `/browse`, and `/code` redirect there.
+This Worker only serves files. Uploading, replacing, renaming, deleting, and browsing CDN files (and the PDC code browser) live in the [marketing-tools hub](https://marketing-tools.ops-1df.workers.dev) behind Google sign-in and per-user permissions. That code is in the [marketing-tools repo](https://github.com/pointdotcom-marketing/marketing-tools), so changes to upload or browse go there, not here.
+
+Old links keep working. These paths answer with a 302:
+
+| Path on `files.point.com` | Redirects to |
+| --- | --- |
+| `/upload` | [`/tools/cdn-files`](https://marketing-tools.ops-1df.workers.dev/tools/cdn-files) |
+| `/browse` | [`/tools/cdn-files`](https://marketing-tools.ops-1df.workers.dev/tools/cdn-files) |
+| `/code` | [`/tools/code-browser`](https://marketing-tools.ops-1df.workers.dev/tools/code-browser) |
 
 ## Key Features
 
@@ -15,10 +23,10 @@ This Worker only serves files. Uploading, replacing, renaming, deleting, and bro
 - **Custom Domain Support**: Serves assets from `files.point.com`
 - **Intelligent Caching**: Optimized cache headers with ETags and Last-Modified
 
-### 📁 File Management (marketing-tools hub)
+### 📁 File Management ([marketing-tools](https://github.com/pointdotcom-marketing/marketing-tools))
 
 - **Upload & replace**: any signed-in point.com account; uploads never overwrite (duplicate names get `-1`, `-2`, …)
-- **Rename, delete, restore, redirects**: people granted *Manage CDN files* on the hub Admin page
+- **Rename, delete, restore, redirects**: people granted *Manage CDN files* (`cdn.manage`) on the hub Admin page; anyone else can request a rename or delete from a file's ⋯ menu for a super admin to approve
 - **Rename redirects**: a rename can leave an empty placeholder at the old key (`cdn-redirect-to` custom metadata); this Worker answers it with a `no-store` 302 to the new key
 - **Trash**: deleted uploads move under `_trash/`, which this Worker never serves
 
@@ -52,6 +60,8 @@ This Worker only serves files. Uploading, replacing, renaming, deleting, and bro
 
 File management: marketing-tools hub ──▶ same R2 bucket
 ```
+
+The two Workers share the `marketing-cdn` bucket through a small contract (`_trash/` and `cdn-redirect-to` metadata). It's documented in [AGENTS.md](AGENTS.md#contract-with-marketing-tools-cdn-files) and covered by the "asset serving contract" tests in [src/index.test.js](src/index.test.js).
 
 ## Supported File Types
 
@@ -87,7 +97,7 @@ File management: marketing-tools hub ──▶ same R2 bucket
 
 Use **Upload & browse files** in the [marketing-tools hub](https://marketing-tools.ops-1df.workers.dev/tools/cdn-files) (`files.point.com/upload` redirects there) and sign in with your point.com Google account.
 
-Uploads never overwrite an existing object. If `logo.png` is already on the CDN, the new file is stored as `logo-1.png`. To keep the same URL, use **Replace** on that file. People with *Manage CDN files* can also rename (optionally leaving a redirect), delete to Trash, and restore.
+Uploads never overwrite an existing object. If `logo.png` is already on the CDN, the new file is stored as `logo-1.png`. To keep the same URL, use **Replace** on that file. People with *Manage CDN files* can also rename (optionally leaving a redirect), delete to Trash, and restore. Everyone else can request a rename or delete. See the [marketing-tools README](https://github.com/pointdotcom-marketing/marketing-tools#cdn-file-management) for the full permission model.
 
 #### Alternative Methods
 
@@ -116,18 +126,12 @@ https://files.point.com/{asset-path}
 
 ## Configuration
 
-### Environment Variables
+### Bindings and Variables
 
-Required environment variables in your Cloudflare Worker:
+- `CDN_BUCKET`: R2 bucket binding for `marketing-cdn`
+- `CDN_PUBLIC_BASE`: public origin used for redirect targets (defaults to `https://files.point.com`)
 
-```bash
-# R2 Bucket Configuration
-CDN_BUCKET=marketing-cdn
-CDN_PUBLIC_BASE=https://files.point.com
-
-# CORS Configuration (automatically configured)
-ALLOWED_ORIGINS=https://www.point.dev,https://point.com,https://files.point.com,https://scorecredit.com,https://scorecredit.webflow.io
-```
+The CORS allowlist is hardcoded as `ALLOWED_ORIGINS` in [src/index.js](src/index.js): `www.point.dev`, `point.com`, `files.point.com`, `scorecredit.com`, `scorecredit.webflow.io`, `canvas.webflow.com`, and Webflow branch previews containing `new-point`. This Worker has no secrets.
 
 Cache purges for replace, rename, and delete happen in the marketing-tools hub, which holds the zone credentials.
 
@@ -136,7 +140,8 @@ Cache purges for replace, rename, and delete happen in the marketing-tools hub, 
 ```toml
 name = "marketing-cdn"
 main = "src/index.js"
-compatibility_date = "2024-12-05"
+account_id = "1df4880142e9b3ccb4341bf7e97c57ff"
+compatibility_date = "2025-09-15"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 preview_urls = true
@@ -206,6 +211,9 @@ bun run deploy
 # Start local development server
 npm run dev
 
+# Run Vitest unit tests (includes the asset serving contract suite)
+npm test
+
 # Deploy to Cloudflare Workers
 npm run deploy
 
@@ -253,6 +261,7 @@ wrangler dev
 - [Cloudflare Workers Dashboard](https://dash.cloudflare.com/workers/services/view/marketing-cdn)
 - [R2 Bucket Dashboard](https://dash.cloudflare.com/r2/default/buckets/marketing-cdn)
 - [Upload & browse files (marketing-tools hub)](https://marketing-tools.ops-1df.workers.dev/tools/cdn-files)
+- [marketing-tools repo](https://github.com/pointdotcom-marketing/marketing-tools): source for upload, browse, file management, and the PDC code browser
 
 ## Integration with PDC Code
 
