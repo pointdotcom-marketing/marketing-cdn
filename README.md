@@ -169,7 +169,7 @@ head_sampling_rate = 1
 
 ### Prerequisites
 
-- Node.js 22+ or Bun
+- Node.js 22.23.4+, 24.22.1+, or 26.12.1+ (or Bun)
 - Cloudflare account with Workers and R2 enabled
 - Wrangler CLI
 
